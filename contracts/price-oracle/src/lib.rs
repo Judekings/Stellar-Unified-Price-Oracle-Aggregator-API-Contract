@@ -813,6 +813,145 @@ impl PriceOracleContract {
         admin::set_subscription_price(&env, duration, amount);
     }
 
+    // --- #306: SAC Token Integration for Subscriptions ---
+
+    /// Sets the SAC token contract used for subscription payments.  Admin-only.
+    ///
+    /// When configured, calls to [`subscribe`](Self::subscribe) will transfer
+    /// `plan_amount` tokens from the consumer to this contract.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
+    pub fn set_subscription_token(env: Env, token_contract: Address) {
+        subscription::set_subscription_token(&env, token_contract);
+    }
+
+    /// Returns the currently configured SAC token contract address, or `None`.
+    pub fn get_subscription_token(env: Env) -> Option<Address> {
+        subscription::get_subscription_token(&env)
+    }
+
+    /// Cancels `consumer`'s subscription and returns a pro-rated token refund
+    /// for the unused portion (when a SAC token is configured).
+    ///
+    /// `consumer` must authorize this call.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`]       — `consumer` did not authorize the call.
+    /// * [`ErrorCode::NoActiveSubscription`] — no active subscription found.
+    pub fn cancel_subscription(env: Env, consumer: Address) {
+        subscription::cancel_subscription(&env, consumer);
+    }
+
+    // --- #304: Consumer Contract Authorization ---
+
+    /// Grants explicit access to `consumer`.  Admin-only.
+    ///
+    /// In `AllowedOnly` mode this consumer may query price data.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
+    pub fn add_authorized_consumer(env: Env, consumer: Address) {
+        consumer_auth::add_authorized_consumer(&env, consumer);
+    }
+
+    /// Revokes explicit access for `consumer`.  Admin-only.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
+    pub fn remove_authorized_consumer(env: Env, consumer: Address) {
+        consumer_auth::remove_authorized_consumer(&env, consumer);
+    }
+
+    /// Sets the global consumer access mode.  Admin-only.
+    ///
+    /// | `mode` | Behaviour |
+    /// |--------|-----------|
+    /// | `0`    | `Public` — no restrictions (default) |
+    /// | `1`    | `AllowedOnly` — only allowlisted consumers |
+    /// | `2`    | `BlockedOnly` — all except blocklisted consumers |
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`]     — if the caller is not the current admin.
+    /// * [`ErrorCode::InvalidConfiguration`] — if `mode` is not `0`, `1`, or `2`.
+    pub fn set_consumer_access_mode(env: Env, mode: u32) {
+        consumer_auth::set_consumer_access_mode(&env, mode);
+    }
+
+    /// Returns the current consumer access mode as a [`ConsumerAccessMode`] variant.
+    pub fn get_consumer_access_mode(env: Env) -> ConsumerAccessMode {
+        consumer_auth::get_consumer_access_mode(&env)
+    }
+
+    /// Returns whether `consumer` is currently authorized to query prices.
+    pub fn is_consumer_authorized(env: Env, consumer: Address) -> bool {
+        consumer_auth::is_consumer_authorized(&env, &consumer)
+    }
+
+    // --- #303: On-chain Price Deviation Report ---
+
+    /// Returns deviation statistics for a source's last `num_rounds` price submissions.
+    ///
+    /// Each submission's deviation from the aggregate at submission time is recorded
+    /// automatically by [`submit_price`](Self::submit_price).
+    ///
+    /// # Returns
+    ///
+    /// A [`DeviationReport`] with `avg_deviation_bps`, `max_deviation_bps`,
+    /// `outlier_count`, `trend` (linear regression slope), and `num_rounds`.
+    pub fn get_source_deviation_report(
+        env: Env,
+        source: Address,
+        asset: Address,
+        num_rounds: u32,
+    ) -> DeviationReport {
+        source_deviation::get_source_deviation_report(&env, source, asset, num_rounds)
+    }
+
+    // --- #305: Price Update Subscription Registry (pull-based) ---
+
+    /// Registers `consumer` as interested in price updates for `asset`.
+    ///
+    /// Off-chain relayers call [`get_subscribed_consumers`](Self::get_subscribed_consumers)
+    /// to discover registered consumers and dispatch pull-requests on their behalf.
+    ///
+    /// `consumer` must authorize this call.  Idempotent if already subscribed.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — if `asset` is not registered.
+    pub fn subscribe_price_updates(env: Env, consumer: Address, asset: Address) {
+        price_update_subscription::subscribe_price_updates(&env, consumer, asset);
+    }
+
+    /// Removes `consumer`'s price-update subscription for `asset`.
+    ///
+    /// `consumer` must authorize this call.  Idempotent if not subscribed.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — if `asset` is not registered.
+    pub fn unsubscribe_price_updates(env: Env, consumer: Address, asset: Address) {
+        price_update_subscription::unsubscribe_price_updates(&env, consumer, asset);
+    }
+
+    /// Returns the list of all consumers currently subscribed to `asset`.
+    ///
+    /// Off-chain relayers read this list and dispatch individual calls to each
+    /// subscriber after a price update.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — if `asset` is not registered.
+    pub fn get_subscribed_consumers(env: Env, asset: Address) -> Vec<Address> {
+        price_update_subscription::get_subscribed_consumers(&env, asset)
+    }
+
     // --- #67: Per-asset resolution ---
 
     /// Sets a per-asset resolution override in seconds.
@@ -1777,6 +1916,29 @@ impl PriceOracleContract {
         result
     }
 
+    /// Consumer-authorized variant of [`get_price`](Self::get_price).
+    ///
+    /// `consumer` must authorize this call and must be permitted under the current
+    /// [`ConsumerAccessMode`].  All other behaviour is identical to `get_price`.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if `consumer` is not allowed under the
+    ///   current access mode.
+    pub fn get_price_authorized(
+        env: Env,
+        consumer: Address,
+        asset: Address,
+        max_age: u64,
+    ) -> Option<AggregatePrice> {
+        consumer.require_auth();
+        consumer_auth::check_consumer_authorized(&env, &consumer);
+        enter_reentrancy_guard(&env);
+        let result = prices::get_price(&env, asset, max_age);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
     pub fn get_price_with_confidence(env: Env, asset: Address) -> Option<(AggregatePrice, u32)> {
         prices::get_price_with_confidence(&env, asset)
     }
@@ -2201,6 +2363,27 @@ impl PriceOracleContract {
         result
     }
 
+    /// Consumer-authorized variant of [`lastprice`](Self::lastprice).
+    ///
+    /// `consumer` must authorize this call and must be permitted under the current
+    /// [`ConsumerAccessMode`].
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if `consumer` is not allowed.
+    pub fn lastprice_authorized(
+        env: Env,
+        consumer: Address,
+        asset: Asset,
+    ) -> Option<PriceData> {
+        consumer.require_auth();
+        consumer_auth::check_consumer_authorized(&env, &consumer);
+        enter_reentrancy_guard(&env);
+        let result = prices::lastprice(&env, asset);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
     /// Returns the TWAP for an asset over a window of ledgers.
     ///
     /// Supports arithmetic and geometric TWAP computation.
@@ -2245,6 +2428,28 @@ impl PriceOracleContract {
         result
     }
 
+    /// Consumer-authorized variant of [`price`](Self::price).
+    ///
+    /// `consumer` must authorize this call and must be permitted under the current
+    /// [`ConsumerAccessMode`].
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if `consumer` is not allowed.
+    pub fn price_authorized(
+        env: Env,
+        consumer: Address,
+        asset: Asset,
+        timestamp: u64,
+    ) -> Option<PriceData> {
+        consumer.require_auth();
+        consumer_auth::check_consumer_authorized(&env, &consumer);
+        enter_reentrancy_guard(&env);
+        let result = prices::price(&env, asset, timestamp);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
     /// Returns the most recent `records` price entries for an asset (SEP-40 `prices`).
     ///
     /// Walks backwards through recent history looking for up to `records` entries. If
@@ -2265,6 +2470,28 @@ impl PriceOracleContract {
     /// `Some(`[`Vec<PriceData>`]`)` containing up to `records` entries in reverse
     /// chronological order, or `None`.
     pub fn prices(env: Env, asset: Asset, records: u32) -> Option<Vec<PriceData>> {
+        enter_reentrancy_guard(&env);
+        let result = prices::prices(&env, asset, records);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
+    /// Consumer-authorized variant of [`prices`](Self::prices).
+    ///
+    /// `consumer` must authorize this call and must be permitted under the current
+    /// [`ConsumerAccessMode`].
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if `consumer` is not allowed.
+    pub fn prices_authorized(
+        env: Env,
+        consumer: Address,
+        asset: Asset,
+        records: u32,
+    ) -> Option<Vec<PriceData>> {
+        consumer.require_auth();
+        consumer_auth::check_consumer_authorized(&env, &consumer);
         enter_reentrancy_guard(&env);
         let result = prices::prices(&env, asset, records);
         exit_reentrancy_guard(&env);
