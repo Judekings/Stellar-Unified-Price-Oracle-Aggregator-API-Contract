@@ -107,6 +107,20 @@ DESCRIPTION=$(invoke get_description)
 [[ -n "$DESCRIPTION" ]] && pass "description is set" || fail "description is empty"
 
 # ---------------------------------------------------------------------------
+# 3b. SEP-40 compliance (base, decimals, resolution, assets, lastprice, price, prices)
+# ---------------------------------------------------------------------------
+info "=== 3b. SEP-40 compliance ==="
+SEP40_FUNCS=(base decimals resolution assets lastprice price prices)
+CONTRACT_SPEC=$(stellar contract invoke --id "$CONTRACT_ID" --source "$ADMIN_IDENTITY" --network "$NETWORK" -- --help 2>&1 || true)
+for fn in "${SEP40_FUNCS[@]}"; do
+    if echo "$CONTRACT_SPEC" | grep -qE "(^|[[:space:]])${fn}([[:space:]]|$)"; then
+        pass "SEP-40 function '$fn' is present in contract interface"
+    else
+        fail "SEP-40 function '$fn' missing from contract interface"
+    fi
+done
+
+# ---------------------------------------------------------------------------
 # 4. Register test source and verify
 # ---------------------------------------------------------------------------
 info "=== 4. Register test source ==="
