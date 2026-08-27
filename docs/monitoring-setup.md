@@ -115,6 +115,10 @@ Full metrics reference: [`docs/monitoring/README.md`](./monitoring/README.md)
 
 ### Prometheus alerting rules (`alerts.yml`)
 
+The full, canonical rule set (including `OracleAllSourcesDown`, `OracleStalePriceData`,
+and `OraclePriceSpike`) lives in [`docs/monitoring/alerts.yml`](monitoring/alerts.yml) —
+point Prometheus's `rule_files:` at it directly. Excerpt:
+
 ```yaml
 groups:
   - name: oracle
