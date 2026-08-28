@@ -4802,3 +4802,15 @@ mod correlation_feature_tests;
 
 #[cfg(test)]
 mod did_bridge_metadata_tests;
+
+#[cfg(test)]
+mod issue_307_alert_rules_tests;
+
+#[cfg(test)]
+mod issue_308_health_monitoring_tests;
+
+#[cfg(test)]
+mod issue_309_rate_limiting_tests;
+
+#[cfg(test)]
+mod issue_310_fee_market_tests;
