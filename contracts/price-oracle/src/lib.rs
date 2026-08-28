@@ -150,6 +150,9 @@ mod oracle_sync_tests;
 #[cfg(test)]
 mod early_submission_discount_tests;
 
+#[cfg(test)]
+mod upgrade_simulation_tests;
+
 pub use types::{
     AggregatePrice,
     AggregationMethod,
