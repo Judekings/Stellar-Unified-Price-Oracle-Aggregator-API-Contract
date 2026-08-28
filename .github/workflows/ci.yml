@@ -28,6 +28,26 @@ jobs:
       - name: Run tests
         run: make test
 
+  abi-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --version "^23"
+      - name: Generate ABI
+        run: ./scripts/generate-abi.sh
+      - name: Upload generated ABI
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-abi
+          path: docs/abi.json
+
   deny:
     runs-on: ubuntu-latest
     steps:

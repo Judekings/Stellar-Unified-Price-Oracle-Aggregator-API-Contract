@@ -1,4 +1,4 @@
-use soroban_sdk::{contractevent, Address, Bytes, String, Symbol};
+use soroban_sdk::{contractevent, Address, Bytes, BytesN, String, Symbol};
 
 /// Publishes a generic admin-action audit event.
 ///
@@ -564,6 +564,21 @@ pub struct OperationCancelledEvent {
     /// Address of the admin who cancelled the operation.
     #[topic]
     pub cancelled_by: Address,
+}
+
+/// Emitted when the delay for a priority tier is changed by the admin.
+///
+/// Topics: `changed_by`
+#[contractevent]
+#[derive(Clone)]
+pub struct PriorityDelayChangedEvent {
+    /// Priority tier discriminant (0 = Urgent, 1 = Normal, 2 = LongTerm).
+    pub priority: u32,
+    /// New delay in ledgers for this tier.
+    pub new_delay: u32,
+    /// Admin address that changed the delay.
+    #[topic]
+    pub changed_by: Address,
 }
 
 #[contractevent]
@@ -1135,10 +1150,6 @@ pub struct SourceBondReturnedEvent {
     pub amount: i128,
 }
 
-
-
-
-
 // =============================================================================
 // Missing events for feature modules
 // =============================================================================
@@ -1472,6 +1483,76 @@ pub struct RateLimitTierChangedEvent {
 // Already defined elsewhere, but needed here as well.
 // Note: InvalidSubmissionRecordedEvent is already defined above; this is the canonical copy.
 
+// --- #217: Configurable optimistic-oracle parameters ---
+
+/// Emitted when the admin updates the optimistic proposal dispute window.
+#[contractevent]
+#[derive(Clone)]
+pub struct DisputeWindowChangedEvent {
+    #[topic]
+    pub admin: Address,
+    pub dispute_window_ledgers: u32,
+}
+
+/// Emitted when the admin updates the optimistic proposal minimum bond.
+#[contractevent]
+#[derive(Clone)]
+pub struct OptimisticMinBondChangedEvent {
+    #[topic]
+    pub admin: Address,
+    pub min_bond: i128,
+}
+
+// --- #216: Off-chain signature-verified price submission ---
+
+/// Emitted when a source registers (or rotates) its Ed25519 submission key.
+#[contractevent]
+#[derive(Clone)]
+pub struct SubmissionKeyRegisteredEvent {
+    #[topic]
+    pub source: Address,
+    pub public_key: BytesN<32>,
+}
+
+/// Emitted when a price is accepted via a pre-signed Ed25519 proof.
+#[contractevent]
+#[derive(Clone)]
+pub struct PriceSubmittedWithProofEvent {
+    #[topic]
+    pub asset: Address,
+    #[topic]
+    pub source: Address,
+    pub price: i128,
+    pub timestamp: u64,
+    pub nonce: u64,
+}
+
+// --- #218: Configurable aggregation triggers ---
+
+/// Emitted when the admin (re)configures a per-asset aggregation trigger.
+///
+/// `trigger_type`: `0` = time interval (seconds), `1` = submission threshold
+/// (count), `2` = deviation threshold (basis points).
+#[contractevent]
+#[derive(Clone)]
+pub struct TriggerConfigChangedEvent {
+    #[topic]
+    pub asset: Address,
+    pub trigger_type: u32,
+    pub value: i128,
+}
+
+/// Emitted when a configured trigger fires and aggregation is re-run.
+///
+/// `trigger_type` uses the same encoding as [`TriggerConfigChangedEvent`].
+#[contractevent]
+#[derive(Clone)]
+pub struct AutoTriggerFiredEvent {
+    #[topic]
+    pub asset: Address,
+    pub trigger_type: u32,
+}
+
 /// Emitted when an admin freezes an asset's price during a market emergency (#223).
 #[contractevent]
 #[derive(Clone)]
@@ -1508,4 +1589,179 @@ pub struct NotifPrefSetEvent {
 pub struct NotifPrefsClearedEvent {
     #[topic]
     pub event_type: u32,
+}
+
+/// Emitted when a core configuration snapshot is taken before a parameter change.
+#[contractevent]
+#[derive(Clone)]
+pub struct ConfigSnapshotTakenEvent {
+    /// Address of the admin that triggered the snapshot.
+    #[topic]
+    pub admin: Address,
+    /// Newly assigned snapshot version.
+    pub version: u32,
+    /// Ledger sequence when the snapshot was stored.
+    pub ledger: u32,
+}
+
+/// Emitted when an admin rolls configuration back to a previous snapshot.
+#[contractevent]
+#[derive(Clone)]
+pub struct ConfigRolledBackEvent {
+    /// Address of the admin that performed the rollback.
+    #[topic]
+    pub admin: Address,
+    /// Version that was restored as live config.
+    pub restored_version: u32,
+    /// Version created by snapshotting the pre-rollback live config.
+    pub saved_version: u32,
+}
+
+// ---- Operation expiry events ----
+
+/// Emitted when a new pending operation is enqueued.
+#[contractevent]
+#[derive(Clone)]
+pub struct OperationQueuedEvent {
+    #[topic]
+    pub operation_id: u64,
+    pub expires_at_ledger: u32,
+}
+
+/// Emitted when a pending operation is successfully executed.
+#[contractevent]
+#[derive(Clone)]
+pub struct OperationExecutedEvent {
+    #[topic]
+    pub operation_id: u64,
+}
+
+/// Emitted when a pending operation is expired (either on-demand or via maintenance sweep).
+#[contractevent]
+#[derive(Clone)]
+pub struct OperationExpiredEvent {
+    #[topic]
+    pub operation_id: u64,
+    pub expired_at_ledger: u32,
+}
+
+/// Emitted when the default operation expiry window is changed.
+#[contractevent]
+#[derive(Clone)]
+pub struct ExpiryWindowChangedEvent {
+    pub ledgers: u32,
+}
+
+// ---- Template lifecycle events ----
+
+/// Emitted when a new template is created.
+#[contractevent]
+#[derive(Clone)]
+pub struct TemplateCreatedEvent {
+    #[topic]
+    pub name: Symbol,
+    pub num_steps: u32,
+}
+
+/// Emitted when a template is applied (instantiated into pending operations).
+#[contractevent]
+#[derive(Clone)]
+pub struct TemplateAppliedEvent {
+    #[topic]
+    pub name: Symbol,
+    /// Number of pending operations created from this template application.
+    pub operations_created: u32,
+}
+
+/// Emitted when a template is removed.
+#[contractevent]
+#[derive(Clone)]
+pub struct TemplateRemovedEvent {
+    #[topic]
+    pub name: Symbol,
+}
+
+// =============================================================================
+// #283 — Stellar DID Integration Events
+// =============================================================================
+
+/// Emitted when a DID document is registered.
+#[contractevent]
+#[derive(Clone)]
+pub struct DidRegisteredEvent {
+    #[topic]
+    pub did: Address,
+    #[topic]
+    pub admin: Address,
+}
+
+/// Emitted when a DID document is verified.
+#[contractevent]
+#[derive(Clone)]
+pub struct DidVerifiedEvent {
+    #[topic]
+    pub did: Address,
+    pub verified: bool,
+    pub verifier: Address,
+}
+
+/// Emitted when an oracle source is linked to a DID.
+#[contractevent]
+#[derive(Clone)]
+pub struct SourceDidLinkedEvent {
+    #[topic]
+    pub source: Address,
+    #[topic]
+    pub did: Address,
+    pub verified: bool,
+}
+
+// =============================================================================
+// #282 — Bridge Oracle Events
+// =============================================================================
+
+/// Emitted when a bridge oracle is registered.
+#[contractevent]
+#[derive(Clone)]
+pub struct BridgeOracleRegisteredEvent {
+    #[topic]
+    pub source_asset: Address,
+    #[topic]
+    pub target_asset: Address,
+    pub oracle_contract: Address,
+}
+
+/// Emitted when a bridged price is submitted.
+#[contractevent]
+#[derive(Clone)]
+pub struct BridgePriceSubmittedEvent {
+    #[topic]
+    pub asset: Address,
+    pub price: i128,
+    pub timestamp: u64,
+    pub decimals: u32,
+}
+
+// =============================================================================
+// #285 — Ecosystem Metadata Events
+// =============================================================================
+
+/// Emitted when feed metadata is registered.
+#[contractevent]
+#[derive(Clone)]
+pub struct FeedMetadataRegisteredEvent {
+    #[topic]
+    pub asset: Address,
+    pub symbol: String,
+    pub description: String,
+}
+
+/// Emitted when feed metadata is updated.
+#[contractevent]
+#[derive(Clone)]
+pub struct FeedMetadataUpdatedEvent {
+    #[topic]
+    pub asset: Address,
+    pub symbol: String,
+    pub updated_at: u64,
 }

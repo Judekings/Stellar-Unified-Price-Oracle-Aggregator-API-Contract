@@ -1,0 +1,3 @@
+# Off-chain executor service dependencies
+stellar-sdk==11.0.0
+requests==2.32.3

@@ -7,9 +7,6 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
-[lib]
-# Required for cargo-fuzz — the fuzz crate itself is not a cdylib.
-
 [[bin]]
 name = "fuzz_aggregation"
 path = "fuzz_targets/fuzz_aggregation.rs"

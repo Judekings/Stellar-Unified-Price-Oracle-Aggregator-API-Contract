@@ -10,40 +10,56 @@ mod admin;
 mod admin_op_limits;
 mod alerts;
 mod amm;
+mod asset_inactivity;
 mod assets;
 // The core module is always compiled (it has no Env deps).
 // When the `fuzz` feature is enabled it is also re-exported so that the
 // fuzz crate can call `price_oracle::core::*` directly.
+mod audit_log;
+mod config_history;
 #[cfg_attr(feature = "fuzz", allow(dead_code))]
 pub(crate) mod core;
 mod cross_reference;
 mod deadline_rebate;
+mod dex;
 mod errors;
 mod event_indexing;
 mod events;
 mod exotic_pricing;
+mod export_history;
 mod fee_market;
 mod finality;
+mod freeze;
+mod gas_metering;
 mod health;
 mod history;
 mod migration;
 mod multisig;
+mod notifications;
 mod optimistic;
 mod pause;
 mod per_asset_decimals;
 mod prices;
 mod rate_limiting;
+mod rbac;
+mod recovery;
 mod reentrancy;
 mod relayer;
+mod relayer_bonds;
+mod relayer_dashboard;
 mod reputation;
 mod rotation;
+mod signed_submission;
+mod simulate_batch;
+mod source_deviation;
 mod sources;
 mod state_channel;
+mod state_introspection;
 mod storage;
-mod gas_metering;
 mod submission_deadline;
 mod subscription;
 mod timelock;
+mod triggers;
 mod ttl_batching;
 mod types;
 mod vdf_sampler;
@@ -54,6 +70,31 @@ mod rbac;
 mod emergency_pause;
 mod freeze;
 mod notifications;
+mod config_history;
+mod batch_storage;
+mod price_proof;
+mod price_callback;
+mod contribution_quality;
+
+// =============================================================================
+// #283 — Stellar DID Integration
+// =============================================================================
+mod did;
+
+// =============================================================================
+// #282 — Bridge Oracle for Non-Stellar Assets
+// =============================================================================
+mod bridge_oracle;
+
+// =============================================================================
+// #285 — Ecosystem Metadata Registration
+// =============================================================================
+mod ecosystem_metadata;
+
+// =============================================================================
+// #284 — Event Streaming to External Databases
+// =============================================================================
+mod event_streaming;
 
 #[cfg(test)]
 mod circuit_breaker_tests;
@@ -89,31 +130,74 @@ mod rbac_tests;
 mod emergency_pause_tests;
 
 #[cfg(test)]
-mod compaction_sharding_budget_tests;
+mod config_history_tests;
+
+#[cfg(test)]
+mod state_introspection_tests;
+
+#[cfg(test)]
+mod dex_tests;
+
+#[cfg(test)]
+mod amm_integration_tests;
+
+#[cfg(test)]
+mod l2_sequencer_oracle_tests;
+
+#[cfg(test)]
+mod oracle_sync_tests;
+
+#[cfg(test)]
+mod early_submission_discount_tests;
+
+#[cfg(test)]
+mod upgrade_simulation_tests;
 
 pub use types::{
-    AggregatePrice, AggregationMethod, Asset, BatchOperation, CrossReferenceResult, DataKey,
-    ErrorCode, FinalityStatus, FinalizedPrice, HealthReport, MigrationState, OracleSources,
-    PendingBatch, PendingFinalityEntry, PriceCommit, PriceData, PriceEntry, PriceHistoryEntry,
-    PriceOverrideEntry, RelayerInfo, SourceHealthStatus, SourceVerification, SubscriptionPlans,
-    DisqualificationStatus, SourceDemeritState, DemeritConfig,
-    SourceGovernance, SourceProposal,
-    SourceGeoMetadata, DecentralizationReport,
-    GasRecord, StorageTtlEntry,
-    FrozenPrice, NotificationPreference,
-    // #252 — versioned aggregate
-    VersionedAggregatePrice,
-    // #247 — history compaction
-    CompactionMetadata,
-    // #253 — storage budget
-    StorageBudget, TotalStorageBudget,
+    AggregatePrice,
+    AggregationMethod,
+    Asset,
+    BatchOperation,
+    BatchSimulationResult,
+    ConfigSnapshot,
+    CrossReferenceResult,
+    DataKey,
+    DecentralizationReport,
+    DemeritConfig,
+    DisqualificationStatus,
+    ErrorCode,
+    // History export
+    ExportedEntry,
+    ExportedHistorySnapshot,
+    FinalityStatus,
+    FinalizedPrice,
+    FrozenPrice,
+    GasRecord,
+    HealthReport,
+    MigrationState,
+    NotificationPreference,
+    // Timelock priority
+    OperationPriority,
+    OperationSimulationResult,
+    OracleSources,
+    PendingBatch,
+    PendingFinalityEntry,
+    PriceCommit,
+    PriceData,
+    PriceEntry,
+    PriceHistoryEntry,
+    PriceOverrideEntry,
+    RelayerInfo,
+    // Batch dry-run simulation
+    SimulationWarning, OperationSimulationResult, BatchSimulationResult,
+    // State introspection
+    StateDump, StateAnalysis, StateDiff, StateDiffEntry,
+    // DEX / AMM integration
+    DexPrice, AmmWeightConfig, SoroswapPool,
 };
 
-
-
 use soroban_sdk::{
-    contract, contractimpl, panic_with_error, Address, Bytes, BytesN, Env, Map, String, Symbol,
-    Vec,
+    contract, contractimpl, panic_with_error, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
 };
 
 use crate::storage::{enter_reentrancy_guard, exit_reentrancy_guard, read_registered_assets};
@@ -269,7 +353,14 @@ impl PriceOracleContract {
         max_ratio: u128,
         enabled: bool,
     ) {
-        correlation::set_correlation_pair(&env, base_asset, quote_asset, min_ratio, max_ratio, enabled);
+        correlation::set_correlation_pair(
+            &env,
+            base_asset,
+            quote_asset,
+            min_ratio,
+            max_ratio,
+            enabled,
+        );
     }
 
     pub fn is_correlation_flagged(env: Env, source: Address, asset: Address) -> bool {
@@ -288,7 +379,11 @@ impl PriceOracleContract {
         challenger::resolve_challenge(&env, challenge_id, is_valid);
     }
 
-    pub fn get_challenge_history(env: Env, asset: Address, limit: u32) -> Vec<crate::types::Challenge> {
+    pub fn get_challenge_history(
+        env: Env,
+        asset: Address,
+        limit: u32,
+    ) -> Vec<crate::types::Challenge> {
         challenger::get_challenge_history(&env, asset, limit)
     }
 
@@ -300,7 +395,11 @@ impl PriceOracleContract {
         audit_log::get_audit_log_count(&env)
     }
 
-    pub fn get_admin_audit_log(env: Env, from_id: u32, limit: u32) -> Vec<crate::types::AuditEntry> {
+    pub fn get_admin_audit_log(
+        env: Env,
+        from_id: u32,
+        limit: u32,
+    ) -> Vec<crate::types::AuditEntry> {
         audit_log::get_admin_audit_log(&env, from_id, limit)
     }
 
@@ -577,16 +676,6 @@ impl PriceOracleContract {
         result
     }
 
-    pub fn set_aggregation_method(env: Env, method: u32) {
-        reentrancy::enter(&env);
-        admin::set_aggregation_method(&env, method);
-        reentrancy::exit(&env);
-    }
-
-    pub fn get_aggregation_method(env: Env) -> u32 {
-        admin::get_aggregation_method(&env)
-    }
-
     /// Sets the heartbeat interval — the period after which a silent source is considered
     /// inactive.
     ///
@@ -736,6 +825,145 @@ impl PriceOracleContract {
         admin::set_subscription_price(&env, duration, amount);
     }
 
+    // --- #306: SAC Token Integration for Subscriptions ---
+
+    /// Sets the SAC token contract used for subscription payments.  Admin-only.
+    ///
+    /// When configured, calls to [`subscribe`](Self::subscribe) will transfer
+    /// `plan_amount` tokens from the consumer to this contract.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
+    pub fn set_subscription_token(env: Env, token_contract: Address) {
+        subscription::set_subscription_token(&env, token_contract);
+    }
+
+    /// Returns the currently configured SAC token contract address, or `None`.
+    pub fn get_subscription_token(env: Env) -> Option<Address> {
+        subscription::get_subscription_token(&env)
+    }
+
+    /// Cancels `consumer`'s subscription and returns a pro-rated token refund
+    /// for the unused portion (when a SAC token is configured).
+    ///
+    /// `consumer` must authorize this call.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`]       — `consumer` did not authorize the call.
+    /// * [`ErrorCode::NoActiveSubscription`] — no active subscription found.
+    pub fn cancel_subscription(env: Env, consumer: Address) {
+        subscription::cancel_subscription(&env, consumer);
+    }
+
+    // --- #304: Consumer Contract Authorization ---
+
+    /// Grants explicit access to `consumer`.  Admin-only.
+    ///
+    /// In `AllowedOnly` mode this consumer may query price data.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
+    pub fn add_authorized_consumer(env: Env, consumer: Address) {
+        consumer_auth::add_authorized_consumer(&env, consumer);
+    }
+
+    /// Revokes explicit access for `consumer`.  Admin-only.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
+    pub fn remove_authorized_consumer(env: Env, consumer: Address) {
+        consumer_auth::remove_authorized_consumer(&env, consumer);
+    }
+
+    /// Sets the global consumer access mode.  Admin-only.
+    ///
+    /// | `mode` | Behaviour |
+    /// |--------|-----------|
+    /// | `0`    | `Public` — no restrictions (default) |
+    /// | `1`    | `AllowedOnly` — only allowlisted consumers |
+    /// | `2`    | `BlockedOnly` — all except blocklisted consumers |
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`]     — if the caller is not the current admin.
+    /// * [`ErrorCode::InvalidConfiguration`] — if `mode` is not `0`, `1`, or `2`.
+    pub fn set_consumer_access_mode(env: Env, mode: u32) {
+        consumer_auth::set_consumer_access_mode(&env, mode);
+    }
+
+    /// Returns the current consumer access mode as a [`ConsumerAccessMode`] variant.
+    pub fn get_consumer_access_mode(env: Env) -> ConsumerAccessMode {
+        consumer_auth::get_consumer_access_mode(&env)
+    }
+
+    /// Returns whether `consumer` is currently authorized to query prices.
+    pub fn is_consumer_authorized(env: Env, consumer: Address) -> bool {
+        consumer_auth::is_consumer_authorized(&env, &consumer)
+    }
+
+    // --- #303: On-chain Price Deviation Report ---
+
+    /// Returns deviation statistics for a source's last `num_rounds` price submissions.
+    ///
+    /// Each submission's deviation from the aggregate at submission time is recorded
+    /// automatically by [`submit_price`](Self::submit_price).
+    ///
+    /// # Returns
+    ///
+    /// A [`DeviationReport`] with `avg_deviation_bps`, `max_deviation_bps`,
+    /// `outlier_count`, `trend` (linear regression slope), and `num_rounds`.
+    pub fn get_source_deviation_report(
+        env: Env,
+        source: Address,
+        asset: Address,
+        num_rounds: u32,
+    ) -> DeviationReport {
+        source_deviation::get_source_deviation_report(&env, source, asset, num_rounds)
+    }
+
+    // --- #305: Price Update Subscription Registry (pull-based) ---
+
+    /// Registers `consumer` as interested in price updates for `asset`.
+    ///
+    /// Off-chain relayers call [`get_subscribed_consumers`](Self::get_subscribed_consumers)
+    /// to discover registered consumers and dispatch pull-requests on their behalf.
+    ///
+    /// `consumer` must authorize this call.  Idempotent if already subscribed.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — if `asset` is not registered.
+    pub fn subscribe_price_updates(env: Env, consumer: Address, asset: Address) {
+        price_update_subscription::subscribe_price_updates(&env, consumer, asset);
+    }
+
+    /// Removes `consumer`'s price-update subscription for `asset`.
+    ///
+    /// `consumer` must authorize this call.  Idempotent if not subscribed.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — if `asset` is not registered.
+    pub fn unsubscribe_price_updates(env: Env, consumer: Address, asset: Address) {
+        price_update_subscription::unsubscribe_price_updates(&env, consumer, asset);
+    }
+
+    /// Returns the list of all consumers currently subscribed to `asset`.
+    ///
+    /// Off-chain relayers read this list and dispatch individual calls to each
+    /// subscriber after a price update.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — if `asset` is not registered.
+    pub fn get_subscribed_consumers(env: Env, asset: Address) -> Vec<Address> {
+        price_update_subscription::get_subscribed_consumers(&env, asset)
+    }
+
     // --- #67: Per-asset resolution ---
 
     /// Sets a per-asset resolution override in seconds.
@@ -788,13 +1016,38 @@ impl PriceOracleContract {
     ///
     /// Emits `AggregationMethodChangedEvent`.
     pub fn set_aggregation_method(env: Env, method: u32) {
+        reentrancy::enter(&env);
         admin::set_aggregation_method(&env, method);
+        reentrancy::exit(&env);
     }
 
     /// Returns the current aggregation method discriminant.
     /// * `0` = Median, `1` = Mean, `2` = TrimmedMean, `3` = WeightedMedian
     pub fn get_aggregation_method(env: Env) -> u32 {
         admin::get_aggregation_method(&env)
+    }
+
+    /// Returns the newest retained core-configuration snapshots.
+    ///
+    /// Ordering is newest-first. `count == 0` returns an empty vector. At most
+    /// 100 retained snapshots are ever returned.
+    pub fn get_config_history(env: Env, count: u32) -> Vec<ConfigSnapshot> {
+        config_history::get_config_history(&env, count)
+    }
+
+    /// Restores a previously captured core-configuration snapshot.
+    ///
+    /// Snapshots the current live config first (append-only), then applies the
+    /// selected version. Admin-only.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
+    /// * [`ErrorCode::ConfigVersionNotFound`] — if `version` is missing or pruned.
+    pub fn rollback_config(env: Env, version: u32) {
+        reentrancy::enter(&env);
+        config_history::rollback_config(&env, version);
+        reentrancy::exit(&env);
     }
 
     // --- #70: Min submission interval ---
@@ -838,6 +1091,19 @@ impl PriceOracleContract {
     /// Cancels a pending batch operation without executing it.
     pub fn cancel_batch(env: Env, batch_id: u32) {
         timelock::cancel_batch(&env, batch_id);
+    }
+
+    /// Dry-runs `operations` and returns a [`BatchSimulationResult`] describing what
+    /// *would* happen if the batch were executed — **without committing any state changes**.
+    ///
+    /// Use this before calling [`propose_batch`] to catch misconfigured operations early.
+    ///
+    /// # Returns
+    ///
+    /// A [`BatchSimulationResult`] with per-operation results, warning counts, and an
+    /// `all_succeed` flag indicating whether the full batch is safe to submit.
+    pub fn simulate_batch(env: Env, operations: Vec<BatchOperation>) -> BatchSimulationResult {
+        simulate_batch::simulate_batch(&env, operations)
     }
 
     // --- Sources ---
@@ -985,13 +1251,7 @@ impl PriceOracleContract {
         verifier: Address,
     ) {
         reentrancy::enter(&env);
-        sources::set_source_verification(
-            &env,
-            source,
-            verified,
-            verification_method,
-            verifier,
-        );
+        sources::set_source_verification(&env, source, verified, verification_method, verifier);
         reentrancy::exit(&env);
     }
 
@@ -1217,9 +1477,16 @@ impl PriceOracleContract {
         crate::reputation::get_stake_token_contract(&env)
     }
 
+    /// Sets per-source deviation tolerance in basis points (admin only).
+    /// Set to 0 to clear and fall back to global tolerance.
+    pub fn set_source_deviation_tolerance(env: Env, source: Address, tolerance_bps: u32) {
+        source_deviation::set_source_deviation_tolerance(&env, source, tolerance_bps);
+    }
 
-
-
+    /// Returns per-source deviation tolerance in bps, or None if global is used.
+    pub fn get_source_deviation_tolerance(env: Env, source: Address) -> Option<u32> {
+        source_deviation::get_source_deviation_tolerance(&env, &source)
+    }
 
     // --- Assets ---
 
@@ -1299,6 +1566,36 @@ impl PriceOracleContract {
         result
     }
 
+    // --- Asset Inactivity (#301) ---
+
+    /// Sets the global default inactivity timeout in ledgers (admin only, 0 = disabled).
+    pub fn set_inactivity_timeout(env: Env, timeout_ledgers: u32) {
+        asset_inactivity::set_inactivity_timeout(&env, timeout_ledgers);
+    }
+
+    pub fn get_inactivity_timeout(env: Env) -> u32 {
+        asset_inactivity::get_inactivity_timeout(&env)
+    }
+
+    /// Sets per-asset inactivity timeout override (admin only, 0 = use global).
+    pub fn set_asset_inactivity_timeout(env: Env, asset: Address, timeout_ledgers: u32) {
+        asset_inactivity::set_asset_inactivity_timeout(&env, asset, timeout_ledgers);
+    }
+
+    pub fn get_asset_inactivity_timeout(env: Env, asset: Address) -> u32 {
+        asset_inactivity::get_asset_inactivity_timeout(&env, &asset)
+    }
+
+    /// Returns true if the asset is considered inactive (past its timeout).
+    pub fn is_asset_inactive(env: Env, asset: Address) -> bool {
+        asset_inactivity::is_asset_inactive(&env, &asset)
+    }
+
+    /// Admin: check an asset and deregister it if it exceeds inactivity threshold.
+    pub fn check_and_deregister_if_inactive(env: Env, asset: Address) {
+        asset_inactivity::check_and_deregister_if_inactive(&env, asset);
+    }
+
     pub fn set_price_bounds(
         env: Env,
         asset: Address,
@@ -1366,6 +1663,36 @@ impl PriceOracleContract {
         optimistic::get_proposal(&env, proposal_id)
     }
 
+    /// Sets the dispute window (in ledgers) applied to new optimistic proposals.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the current admin.
+    /// * [`ErrorCode::InvalidConfiguration`] — `dispute_window_ledgers` is `0`.
+    pub fn set_optimistic_dispute_window(env: Env, dispute_window_ledgers: u32) {
+        admin::set_optimistic_dispute_window(&env, dispute_window_ledgers);
+    }
+
+    /// Returns the dispute window (in ledgers) applied to new optimistic proposals.
+    pub fn get_optimistic_dispute_window(env: Env) -> u32 {
+        admin::get_optimistic_dispute_window(&env)
+    }
+
+    /// Sets the minimum bond required to propose or dispute an optimistic price.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the current admin.
+    /// * [`ErrorCode::InvalidConfiguration`] — `min_bond` is `<= 0`.
+    pub fn set_optimistic_min_bond(env: Env, min_bond: i128) {
+        admin::set_optimistic_min_bond(&env, min_bond);
+    }
+
+    /// Returns the minimum bond required to propose or dispute an optimistic price.
+    pub fn get_optimistic_min_bond(env: Env) -> i128 {
+        admin::get_optimistic_min_bond(&env)
+    }
+
     // --- Prices ---
 
     /// Submits a price observation for an asset from an authorized oracle source.
@@ -1393,17 +1720,22 @@ impl PriceOracleContract {
     /// * [`ErrorCode::InvalidPrice`] — if `price` is ≤ 0.
     /// * [`ErrorCode::PriceBelowMinimum`] — if `price` is below the asset's minimum price.
     /// * [`ErrorCode::InvalidTimestamp`] — if `timestamp` is too far in the future.
-    pub fn submit_price(env: Env, source: Address, asset: Address, price: i128, timestamp: u64) {
+    pub fn submit_price(env: Env, source: Address, asset: Address, price: i128, timestamp: u64, nonce: u64) {
         reentrancy::enter(&env);
         // Measure budget before and after to record last submit_price cost.
         let before_cpu = env.budget().cpu_instruction_count();
         let before_mem = env.budget().memory_bytes_count();
-        prices::submit_price(&env, source, asset, price, timestamp);
+        prices::submit_price(&env, source, asset, price, timestamp, nonce);
         let after_cpu = env.budget().cpu_instruction_count();
         let after_mem = env.budget().memory_bytes_count();
         let cpu_delta = after_cpu.saturating_sub(before_cpu);
         let mem_delta = after_mem.saturating_sub(before_mem);
-        crate::gas_metering::write_last_gas(&env, String::from_str(&env, "submit_price"), cpu_delta, mem_delta);
+        crate::gas_metering::write_last_gas(
+            &env,
+            String::from_str(&env, "submit_price"),
+            cpu_delta,
+            mem_delta,
+        );
         reentrancy::exit(&env);
     }
 
@@ -1437,6 +1769,117 @@ impl PriceOracleContract {
     /// Same error conditions as `submit_price`, applied per entry.
     pub fn submit_prices(env: Env, source: Address, asset_prices: Vec<(Address, i128, u64)>) {
         prices::submit_prices(&env, source, asset_prices);
+    }
+
+    // --- Off-chain signature-verified price submission (#216) ---
+
+    /// Registers (or rotates) the Ed25519 public key `source` uses to sign
+    /// off-chain price proofs for [`submit_price_with_proof`]. Must be
+    /// authorized by `source`.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::SourceNotFound`] — `source` is not a registered oracle source.
+    pub fn register_submission_key(env: Env, source: Address, public_key: BytesN<32>) {
+        signed_submission::register_submission_key(&env, source, public_key);
+    }
+
+    /// Submits a price on behalf of `source` using a pre-signed Ed25519 proof
+    /// instead of `source`'s Soroban transaction authorization. Callable by
+    /// anyone (typically a relayer bundling proofs from many sources).
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::ContractPaused`] — the contract is currently paused.
+    /// * [`ErrorCode::SourceNotFound`] — `source` is not a registered oracle source.
+    /// * [`ErrorCode::AssetNotRegistered`] — `asset` is not registered.
+    /// * [`ErrorCode::SigningKeyNotRegistered`] — `source` has no registered submission key.
+    /// * [`ErrorCode::SignatureExpired`] — `expiration_ledger` has already passed.
+    /// * [`ErrorCode::InvalidNonce`] — `nonce` does not exceed the source's last accepted nonce.
+    /// * [`ErrorCode::NotAuthorized`] — the Ed25519 signature is invalid, or `source` is suspended.
+    /// * [`ErrorCode::InvalidPrice`] / [`ErrorCode::PriceBelowMinimum`] / [`ErrorCode::InvalidTimestamp`]
+    pub fn submit_price_with_proof(
+        env: Env,
+        source: Address,
+        asset: Address,
+        price: i128,
+        timestamp: u64,
+        nonce: u64,
+        expiration_ledger: u32,
+        signature: BytesN<64>,
+    ) {
+        signed_submission::submit_price_with_proof(
+            &env,
+            source,
+            asset,
+            price,
+            timestamp,
+            nonce,
+            expiration_ledger,
+            signature,
+        );
+    }
+
+    // --- Configurable aggregation triggers (#218) ---
+
+    /// Sets the minimum number of seconds between time-triggered
+    /// aggregations for `asset`. `0` disables the time-based trigger.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the current admin.
+    /// * [`ErrorCode::AssetNotRegistered`] — `asset` is not registered.
+    pub fn set_time_trigger(env: Env, asset: Address, interval_seconds: u64) {
+        triggers::set_time_trigger(&env, asset, interval_seconds);
+    }
+
+    /// Returns the configured time-trigger interval (seconds) for `asset`. `0` = disabled.
+    pub fn get_time_trigger(env: Env, asset: Address) -> u64 {
+        triggers::get_time_trigger(&env, asset)
+    }
+
+    /// Sets the number of new submissions that auto-trigger aggregation for
+    /// `asset`. `0` disables the threshold-based trigger.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the current admin.
+    /// * [`ErrorCode::AssetNotRegistered`] — `asset` is not registered.
+    pub fn set_submission_threshold_trigger(env: Env, asset: Address, threshold: u32) {
+        triggers::set_submission_threshold_trigger(&env, asset, threshold);
+    }
+
+    /// Returns the configured submission-count trigger threshold for `asset`. `0` = disabled.
+    pub fn get_submission_threshold_trigger(env: Env, asset: Address) -> u32 {
+        triggers::get_submission_threshold_trigger(&env, asset)
+    }
+
+    /// Sets the price deviation (in basis points) that auto-triggers
+    /// aggregation for `asset`. `0` disables the deviation-based trigger.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the current admin.
+    /// * [`ErrorCode::AssetNotRegistered`] — `asset` is not registered.
+    /// * [`ErrorCode::InvalidConfiguration`] — `deviation_bps` exceeds `100_000`.
+    pub fn set_deviation_trigger(env: Env, asset: Address, deviation_bps: u32) {
+        triggers::set_deviation_trigger(&env, asset, deviation_bps);
+    }
+
+    /// Returns the configured deviation trigger threshold (bps) for `asset`. `0` = disabled.
+    pub fn get_deviation_trigger(env: Env, asset: Address) -> u32 {
+        triggers::get_deviation_trigger(&env, asset)
+    }
+
+    /// Permissionless keeper endpoint: re-aggregates `asset` if at least the
+    /// configured time-trigger interval has elapsed since the last
+    /// trigger-driven aggregation. Returns `true` if aggregation ran.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — `asset` is not registered.
+    pub fn poke_time_trigger(env: Env, asset: Address) -> bool {
+        triggers::poke_time_trigger(&env, asset)
     }
 
     /// Returns current budget counters and the last recorded gas usage.
@@ -1479,6 +1922,29 @@ impl PriceOracleContract {
     /// * [`ErrorCode::AssetNotRegistered`] — if `asset` is not registered.
     /// * [`ErrorCode::RateLimitExceeded`] — if the caller has exceeded the query rate limit.
     pub fn get_price(env: Env, asset: Address, max_age: u64) -> Option<AggregatePrice> {
+        enter_reentrancy_guard(&env);
+        let result = prices::get_price(&env, asset, max_age);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
+    /// Consumer-authorized variant of [`get_price`](Self::get_price).
+    ///
+    /// `consumer` must authorize this call and must be permitted under the current
+    /// [`ConsumerAccessMode`].  All other behaviour is identical to `get_price`.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if `consumer` is not allowed under the
+    ///   current access mode.
+    pub fn get_price_authorized(
+        env: Env,
+        consumer: Address,
+        asset: Address,
+        max_age: u64,
+    ) -> Option<AggregatePrice> {
+        consumer.require_auth();
+        consumer_auth::check_consumer_authorized(&env, &consumer);
         enter_reentrancy_guard(&env);
         let result = prices::get_price(&env, asset, max_age);
         exit_reentrancy_guard(&env);
@@ -1672,6 +2138,59 @@ impl PriceOracleContract {
         result
     }
 
+    // --- History export ---
+
+    /// Exports up to `limit` price-history entries for `asset`, starting at `from_ledger`.
+    ///
+    /// Returns an [`ExportedHistorySnapshot`] containing the entries, a lightweight
+    /// `data_hash` for integrity verification, and a `next_cursor` for pagination.
+    ///
+    /// # Arguments
+    ///
+    /// * `asset`       — Registered asset address.
+    /// * `from_ledger` — Inclusive start ledger (pass `0` to start from the beginning).
+    /// * `limit`       — Maximum entries to return (1–200).
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`]  — if `asset` is not registered.
+    /// * [`ErrorCode::ExportLimitExceeded`] — if `limit` is `0` or `> 200`.
+    pub fn export_history(
+        env: Env,
+        asset: Address,
+        from_ledger: u32,
+        limit: u32,
+    ) -> ExportedHistorySnapshot {
+        enter_reentrancy_guard(&env);
+        let result = export_history::export_history(&env, asset, from_ledger, limit);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
+    /// Verifies that `expected_data_hash` matches the XOR-fold hash of all history
+    /// entries for `asset` stored within `[from_ledger, to_ledger]`.
+    ///
+    /// Returns `true` when the hash matches (snapshot is consistent with on-chain state),
+    /// `false` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — if `asset` is not registered.
+    /// * [`ErrorCode::ExportNotFound`]     — if no entries exist in the given range.
+    pub fn verify_export(
+        env: Env,
+        asset: Address,
+        from_ledger: u32,
+        to_ledger: u32,
+        expected_data_hash: u64,
+    ) -> bool {
+        enter_reentrancy_guard(&env);
+        let result =
+            export_history::verify_export(&env, asset, from_ledger, to_ledger, expected_data_hash);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
     // --- Price freeze (#223) ---
 
     /// Freezes the current aggregate price for an asset during a market emergency.
@@ -1719,20 +2238,12 @@ impl PriceOracleContract {
     ///
     /// * [`ErrorCode::NotAuthorized`] — if the caller is not the admin.
     /// * [`ErrorCode::NotificationConfigInvalid`] — if `channel` or `target` exceeds 256 chars.
-    pub fn set_notification_preference(
-        env: Env,
-        event_type: u32,
-        channel: String,
-        target: String,
-    ) {
+    pub fn set_notification_preference(env: Env, event_type: u32, channel: String, target: String) {
         notifications::set_notification_preference(&env, event_type, channel, target);
     }
 
     /// Returns all notification preferences registered for a given event type.
-    pub fn list_notification_preferences(
-        env: Env,
-        event_type: u32,
-    ) -> Vec<NotificationPreference> {
+    pub fn list_notification_preferences(env: Env, event_type: u32) -> Vec<NotificationPreference> {
         notifications::list_notification_preferences(&env, event_type)
     }
 
@@ -2014,6 +2525,27 @@ impl PriceOracleContract {
         result
     }
 
+    /// Consumer-authorized variant of [`lastprice`](Self::lastprice).
+    ///
+    /// `consumer` must authorize this call and must be permitted under the current
+    /// [`ConsumerAccessMode`].
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if `consumer` is not allowed.
+    pub fn lastprice_authorized(
+        env: Env,
+        consumer: Address,
+        asset: Asset,
+    ) -> Option<PriceData> {
+        consumer.require_auth();
+        consumer_auth::check_consumer_authorized(&env, &consumer);
+        enter_reentrancy_guard(&env);
+        let result = prices::lastprice(&env, asset);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
     /// Returns the TWAP for an asset over a window of ledgers.
     ///
     /// Supports arithmetic and geometric TWAP computation.
@@ -2058,6 +2590,28 @@ impl PriceOracleContract {
         result
     }
 
+    /// Consumer-authorized variant of [`price`](Self::price).
+    ///
+    /// `consumer` must authorize this call and must be permitted under the current
+    /// [`ConsumerAccessMode`].
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if `consumer` is not allowed.
+    pub fn price_authorized(
+        env: Env,
+        consumer: Address,
+        asset: Asset,
+        timestamp: u64,
+    ) -> Option<PriceData> {
+        consumer.require_auth();
+        consumer_auth::check_consumer_authorized(&env, &consumer);
+        enter_reentrancy_guard(&env);
+        let result = prices::price(&env, asset, timestamp);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
     /// Returns the most recent `records` price entries for an asset (SEP-40 `prices`).
     ///
     /// Walks backwards through recent history looking for up to `records` entries. If
@@ -2078,6 +2632,28 @@ impl PriceOracleContract {
     /// `Some(`[`Vec<PriceData>`]`)` containing up to `records` entries in reverse
     /// chronological order, or `None`.
     pub fn prices(env: Env, asset: Asset, records: u32) -> Option<Vec<PriceData>> {
+        enter_reentrancy_guard(&env);
+        let result = prices::prices(&env, asset, records);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
+    /// Consumer-authorized variant of [`prices`](Self::prices).
+    ///
+    /// `consumer` must authorize this call and must be permitted under the current
+    /// [`ConsumerAccessMode`].
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — if `consumer` is not allowed.
+    pub fn prices_authorized(
+        env: Env,
+        consumer: Address,
+        asset: Asset,
+        records: u32,
+    ) -> Option<Vec<PriceData>> {
+        consumer.require_auth();
+        consumer_auth::check_consumer_authorized(&env, &consumer);
         enter_reentrancy_guard(&env);
         let result = prices::prices(&env, asset, records);
         exit_reentrancy_guard(&env);
@@ -2304,6 +2880,84 @@ impl PriceOracleContract {
         reentrancy::exit(&env);
     }
 
+    // --- Timelock priority queues ---
+
+    /// Proposes a timelock operation with an explicit priority tier.
+    ///
+    /// * `priority` — `0` = Urgent (fast), `1` = Normal (default), `2` = LongTerm (slow)
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`]      — caller is not the admin.
+    /// * [`ErrorCode::InvalidOperationType`] — `op_type` is not in `0..=7`.
+    /// * [`ErrorCode::InvalidPriority`]    — `priority` is not in `0..=2`.
+    pub fn propose_operation_with_priority(
+        env: Env,
+        op_type: u32,
+        data: soroban_sdk::Bytes,
+        priority: u32,
+    ) -> u32 {
+        reentrancy::enter(&env);
+        let op_enum = match op_type {
+            0 => types::OperationType::Upgrade,
+            1 => types::OperationType::SetAdmin,
+            2 => types::OperationType::SetMinSources,
+            3 => types::OperationType::SetMaxHistory,
+            4 => types::OperationType::SetResolution,
+            5 => types::OperationType::SetDecimals,
+            6 => types::OperationType::SetDescription,
+            7 => types::OperationType::SetTimestampThreshold,
+            _ => panic_with_error!(&env, ErrorCode::InvalidOperationType),
+        };
+        let priority_enum = match priority {
+            0 => types::OperationPriority::Urgent,
+            1 => types::OperationPriority::Normal,
+            2 => types::OperationPriority::LongTerm,
+            _ => panic_with_error!(&env, ErrorCode::InvalidPriority),
+        };
+        let result = timelock::propose_operation_with_priority(&env, op_enum, &data, priority_enum);
+        reentrancy::exit(&env);
+        result
+    }
+
+    /// Returns the required delay (in ledgers) for a given priority tier.
+    ///
+    /// * `priority` — `0` = Urgent, `1` = Normal, `2` = LongTerm.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::InvalidPriority`] — `priority` is not in `0..=2`.
+    pub fn get_priority_delay(env: Env, priority: u32) -> u32 {
+        let priority_enum = match priority {
+            0 => types::OperationPriority::Urgent,
+            1 => types::OperationPriority::Normal,
+            2 => types::OperationPriority::LongTerm,
+            _ => panic_with_error!(&env, ErrorCode::InvalidPriority),
+        };
+        timelock::get_priority_delay(&env, &priority_enum)
+    }
+
+    /// Sets the required delay (in ledgers) for a given priority tier.  Admin-only.
+    ///
+    /// * `priority` — `0` = Urgent, `1` = Normal, `2` = LongTerm.
+    /// * `delay`    — New delay in ledgers.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`]   — caller is not the admin.
+    /// * [`ErrorCode::InvalidPriority`] — `priority` is not in `0..=2`.
+    pub fn set_priority_delay(env: Env, priority: u32, delay: u32) {
+        reentrancy::enter(&env);
+        let priority_enum = match priority {
+            0 => types::OperationPriority::Urgent,
+            1 => types::OperationPriority::Normal,
+            2 => types::OperationPriority::LongTerm,
+            _ => panic_with_error!(&env, ErrorCode::InvalidPriority),
+        };
+        timelock::set_priority_delay(&env, priority_enum, delay);
+        reentrancy::exit(&env);
+    }
+
     // --- Relayer ---
 
     /// Approves a new relayer that can submit prices on behalf of oracle sources.
@@ -2460,6 +3114,156 @@ impl PriceOracleContract {
     /// Submission count. `0` if no relayed submissions have been made.
     pub fn get_relayer_submission_count(env: Env, relayer: Address) -> u64 {
         relayer::get_relayer_submission_count(&env, relayer)
+    }
+
+    /// Submits prices for multiple (source, asset) legs on behalf of one or more oracle
+    /// sources in a single, atomic transaction (#264).
+    ///
+    /// `relayer` authorizes the batch once; each leg's `source` must additionally
+    /// authorize its own leg (per-source auth). Legs must be ordered by non-increasing
+    /// `priority_fee` — the on-chain enforcement of the relayer priority fee market
+    /// (#266): relayers process higher-fee submissions first, and because each
+    /// source's authorization entry covers the exact fee it signed, a relayer cannot
+    /// alter it after the fact without invalidating that source's signature. Because a
+    /// Soroban invocation is atomic, any leg that fails validation rolls back the
+    /// entire batch.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `relayer` - Approved relayer submitting the batch.
+    /// * `submissions` - Non-empty batch of [`RelayedSubmission`] legs (at most
+    ///   [`relayer::MAX_BATCH_SIZE`]), sorted by non-increasing `priority_fee`.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::ContractPaused`] — contract is paused.
+    /// * [`ErrorCode::RelayerNotAuthorized`] — `relayer` is not admin-approved.
+    /// * [`ErrorCode::BatchEmpty`] — `submissions` is empty.
+    /// * [`ErrorCode::BatchTooLarge`] — `submissions` exceeds the maximum batch size.
+    /// * [`ErrorCode::BatchNotFeePrioritized`] — legs are not fee-ordered.
+    /// * Any error `submit_price_relayed` raises for an individual leg.
+    pub fn submit_prices_relayed(env: Env, relayer: Address, submissions: Vec<RelayedSubmission>) {
+        relayer::submit_prices_relayed(&env, relayer, submissions);
+    }
+
+    // --- Relayer performance bonds (#265) ---
+
+    /// Sets the required relayer performance bond amount (in stroops). Admin-only.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the current admin.
+    pub fn set_relayer_bond_amount(env: Env, amount: i128) {
+        relayer_bonds::set_relayer_bond_amount(&env, amount);
+    }
+
+    /// Returns the currently configured required relayer bond amount. Defaults to `0`.
+    pub fn get_relayer_bond_amount(env: Env) -> i128 {
+        relayer_bonds::get_relayer_bond_amount(&env)
+    }
+
+    /// Deposits (tops up to) the required performance bond for `relayer`.
+    ///
+    /// The relayer must authorize this call. A no-op if no bond is required or the
+    /// relayer is already fully bonded.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::RelayerNotAuthorized`] — `relayer` is not admin-approved.
+    /// * [`ErrorCode::StakeTokenNotConfigured`] — no staking token has been configured.
+    pub fn deposit_relayer_bond(env: Env, relayer: Address) {
+        relayer_bonds::deposit_relayer_bond(&env, relayer);
+    }
+
+    /// Returns the currently deposited bond balance (in stroops) for `relayer`.
+    pub fn get_relayer_bond_balance(env: Env, relayer: Address) -> i128 {
+        relayer_bonds::get_relayer_bond_balance(&env, relayer)
+    }
+
+    /// Withdraws the entire deposited performance bond back to `relayer`.
+    ///
+    /// The relayer must authorize this call. A no-op if nothing is deposited.
+    pub fn withdraw_relayer_bond(env: Env, relayer: Address) {
+        relayer_bonds::withdraw_relayer_bond(&env, relayer);
+    }
+
+    /// Records a failure incident against `relayer` (unauthorized price, invalid
+    /// submission, or other operator-attested misbehavior), making it eligible for
+    /// slashing once the configured failure threshold is reached. Admin-only.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the current admin.
+    /// * [`ErrorCode::RelayerNotAuthorized`] — `relayer` is not admin-approved.
+    pub fn record_relayer_failure(env: Env, relayer: Address, reason: RelayerFailureReason) {
+        relayer_bonds::record_relayer_failure(&env, relayer, reason);
+    }
+
+    /// Returns the number of reported failure incidents for `relayer`.
+    pub fn get_relayer_failure_count(env: Env, relayer: Address) -> u32 {
+        relayer_bonds::get_relayer_failure_count(&env, relayer)
+    }
+
+    /// Slashes a configured percentage of `relayer`'s deposited bond into the shared
+    /// treasury. Admin-only.
+    ///
+    /// Unless `force` is `true`, the relayer's reported failure count must be at or
+    /// above the configured failure threshold.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the current admin.
+    /// * [`ErrorCode::RelayerFailureThresholdNotReached`] — not forced, and below the
+    ///   slash-eligibility threshold.
+    pub fn slash_relayer(env: Env, relayer: Address, force: bool) {
+        relayer_bonds::slash_relayer(&env, relayer, force);
+    }
+
+    /// Sets the slash percentage (0-100) applied to a relayer's bond. Admin-only.
+    pub fn set_relayer_slash_percent(env: Env, percent: u32) {
+        relayer_bonds::set_relayer_slash_percent(&env, percent);
+    }
+
+    /// Returns the current relayer slash percentage.
+    pub fn get_relayer_slash_percent(env: Env) -> u32 {
+        relayer_bonds::get_relayer_slash_percent(&env)
+    }
+
+    /// Sets the failure-count threshold at/above which a relayer becomes
+    /// slash-eligible. Admin-only.
+    pub fn set_relayer_failure_threshold(env: Env, threshold: u32) {
+        relayer_bonds::set_relayer_failure_threshold(&env, threshold);
+    }
+
+    /// Returns the current relayer failure threshold.
+    pub fn get_relayer_failure_threshold(env: Env) -> u32 {
+        relayer_bonds::get_relayer_failure_threshold(&env)
+    }
+
+    /// Sets the reward rate (in stroops) credited per accuracy-weighted relayed
+    /// submission. Admin-only. `0` disables reward accrual.
+    pub fn set_relayer_reward_rate(env: Env, rate: i128) {
+        relayer_bonds::set_relayer_reward_rate(&env, rate);
+    }
+
+    /// Returns the current relayer reward rate in stroops.
+    pub fn get_relayer_reward_rate(env: Env) -> i128 {
+        relayer_bonds::get_relayer_reward_rate(&env)
+    }
+
+    /// Returns the total accumulated reward balance (in stroops) owed to `relayer`.
+    pub fn get_relayer_reward_balance(env: Env, relayer: Address) -> i128 {
+        relayer_bonds::get_relayer_reward_balance(&env, relayer)
+    }
+
+    // --- Relayer dashboard (#267) ---
+
+    /// Returns an aggregated operational [`RelayerDashboard`] for `relayer`: submission
+    /// volume, success rate, average latency, fee/reward earnings, bond, per-asset
+    /// breakdown, and a comparative percentile rank against every approved relayer.
+    pub fn get_relayer_dashboard(env: Env, relayer: Address) -> RelayerDashboard {
+        relayer_dashboard::get_relayer_dashboard(&env, relayer)
     }
 
     // --- Cross-Reference Oracle ---
@@ -2707,7 +3511,13 @@ impl PriceOracleContract {
         timestamp: u64,
     ) {
         cross_chain_verify::submit_cross_chain_price(
-            &env, asset, oracle_chain, price, decimals, chain_id, timestamp,
+            &env,
+            asset,
+            oracle_chain,
+            price,
+            decimals,
+            chain_id,
+            timestamp,
         );
     }
 
@@ -3537,7 +4347,9 @@ impl PriceOracleContract {
         min_return: i128,
     ) -> i128 {
         reentrancy::enter(&env);
-        let result = amm::swap(&env, caller, asset, from_asset, to_asset, amount_in, min_return);
+        let result = amm::swap(
+            &env, caller, asset, from_asset, to_asset, amount_in, min_return,
+        );
         reentrancy::exit(&env);
         result
     }
@@ -3570,6 +4382,83 @@ impl PriceOracleContract {
     /// Returns the current AMM max-deviation setting (basis points). Default: 500.
     pub fn amm_get_max_deviation_bps(env: Env) -> u32 {
         amm::get_amm_max_deviation_bps(&env)
+    }
+
+    /// Sets the AMM weight for an asset used during aggregation. Admin-only.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::NotAuthorized`]        — caller is not admin.
+    /// * [`ErrorCode::InvalidConfiguration`] — `weight_bps > 10_000`.
+    pub fn amm_set_weight(env: Env, asset: Address, weight_bps: u32, enabled: bool) {
+        amm::set_amm_weight(&env, asset, weight_bps, enabled);
+    }
+
+    /// Returns the AMM weight configuration for an asset, or `None` if not set.
+    pub fn amm_get_weight(env: Env, asset: Address) -> Option<AmmWeightConfig> {
+        amm::get_amm_weight(&env, asset)
+    }
+
+    /// Registers a Soroswap pool for price derivation. Admin-only.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::NotAuthorized`]        — caller is not admin.
+    /// * [`ErrorCode::InvalidConfiguration`] — either reserve is ≤ 0.
+    pub fn soroswap_register_pool(
+        env: Env,
+        asset_a: Address,
+        asset_b: Address,
+        reserve_a: i128,
+        reserve_b: i128,
+        fee_bps: u32,
+    ) {
+        amm::register_soroswap_pool(&env, asset_a, asset_b, reserve_a, reserve_b, fee_bps);
+    }
+
+    /// Returns the Soroswap pool configuration, or `None` if not found.
+    pub fn soroswap_get_pool(env: Env, asset_a: Address, asset_b: Address) -> Option<SoroswapPool> {
+        amm::get_soroswap_pool(&env, asset_a, asset_b)
+    }
+
+    /// Enables or disables a Soroswap pool. Admin-only.
+    pub fn soroswap_set_pool_status(env: Env, asset_a: Address, asset_b: Address, enabled: bool) {
+        amm::set_soroswap_pool_status(&env, asset_a, asset_b, enabled);
+    }
+
+    /// Reads the Soroswap spot price for an asset pair.
+    ///
+    /// Returns `None` if the pool is disabled or unregistered.
+    pub fn get_soroswap_price(env: Env, asset_a: Address, asset_b: Address) -> Option<i128> {
+        amm::read_soroswap_price(&env, asset_a, asset_b)
+    }
+
+    /// Registers a Stellar DEX pool pair. Admin-only.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::NotAuthorized`]        — caller is not admin.
+    /// * [`ErrorCode::InvalidConfiguration`] — either reserve is ≤ 0.
+    pub fn dex_register_pool(
+        env: Env,
+        asset_a: Address,
+        asset_b: Address,
+        reserve_a: i128,
+        reserve_b: i128,
+    ) {
+        dex::register_dex_pool(&env, asset_a, asset_b, reserve_a, reserve_b);
+    }
+
+    /// Returns the DEX price for `asset` against its paired asset, or `None`.
+    pub fn get_dex_price(env: Env, asset: Address) -> Option<DexPrice> {
+        dex::get_dex_price(&env, asset)
+    }
+
+    /// Returns a serialized state dump for off-chain inspection.
+    pub fn oracle_state_dump(env: Env) -> StateDump {
+        state_introspection::build_state_dump(&env)
+    }
+
+    /// Returns aggregated state analysis statistics.
+    pub fn oracle_state_analyze(env: Env) -> StateAnalysis {
+        state_introspection::build_state_analysis(&env)
     }
 
     // =========================================================================
@@ -3687,6 +4576,201 @@ impl PriceOracleContract {
     pub fn relay_verify_header(env: Env, header: StellarHeader) -> bool {
         cross_chain_relay::verify_header_consistency(&env, &header)
     }
+
+    // =========================================================================
+    // #245 — Admin Key Social Recovery
+    // =========================================================================
+
+    /// Registers the guardian set and required approval threshold. Admin-only.
+    /// Replaces any previously configured guardian set.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::NotAuthorized`] — caller is not admin.
+    /// * [`ErrorCode::InvalidGuardianConfig`] — threshold is `0` or exceeds guardian count.
+    pub fn recovery_set_guardians(env: Env, guardians: Vec<Address>, threshold: u32) {
+        recovery::set_guardians(&env, guardians, threshold);
+    }
+
+    /// Returns the currently registered guardian addresses.
+    pub fn recovery_get_guardians(env: Env) -> Vec<Address> {
+        recovery::get_guardians(&env)
+    }
+
+    /// Returns the number of guardian approvals required to reach recovery threshold.
+    pub fn recovery_get_threshold(env: Env) -> u32 {
+        recovery::get_recovery_threshold(&env)
+    }
+
+    /// Sets the cancellation-window delay in ledgers between reaching guardian
+    /// threshold and a recovery becoming eligible for auto-execution. Admin-only.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::NotAuthorized`] — caller is not admin.
+    /// * [`ErrorCode::InvalidConfiguration`] — `delay_ledgers` is `0`.
+    pub fn recovery_set_delay(env: Env, delay_ledgers: u32) {
+        recovery::set_recovery_delay(&env, delay_ledgers);
+    }
+
+    /// Returns the configured cancellation-window delay in ledgers. Default: ~1 day.
+    pub fn recovery_get_delay(env: Env) -> u32 {
+        recovery::get_recovery_delay(&env)
+    }
+
+    /// A guardian approves recovery, naming `new_admin` as the candidate replacement
+    /// admin. The first guardian to call this initiates the recovery; once the
+    /// configured threshold of distinct guardian approvals is reached, the
+    /// cancellation-window delay starts.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::NotGuardian`] — caller is not a registered guardian.
+    /// * [`ErrorCode::RecoveryAlreadyPending`] — a recovery is already pending for a
+    ///   different candidate; the admin must cancel it first.
+    /// * [`ErrorCode::RecoveryAlreadyApproved`] — this guardian already approved.
+    pub fn recovery_approve(env: Env, guardian: Address, new_admin: Address) {
+        reentrancy::enter(&env);
+        recovery::approve_recovery(&env, guardian, new_admin);
+        reentrancy::exit(&env);
+    }
+
+    /// Cancels the pending recovery. Admin-only — the cancellation window that lets
+    /// a still-in-control admin stop a recovery before it executes.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::NotAuthorized`] — caller is not admin.
+    /// * [`ErrorCode::RecoveryNotPending`] — no recovery is currently pending.
+    pub fn recovery_cancel(env: Env) {
+        reentrancy::enter(&env);
+        recovery::cancel_recovery(&env);
+        reentrancy::exit(&env);
+    }
+
+    /// Executes a ready recovery, installing its candidate as the new contract admin.
+    /// Callable by anyone once guardian threshold has been reached and the
+    /// cancellation-window delay has elapsed.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::RecoveryNotPending`] — no recovery is currently pending.
+    /// * [`ErrorCode::RecoveryDelayNotElapsed`] — threshold not yet reached, or the
+    ///   cancellation-window delay has not yet elapsed.
+    pub fn recovery_execute(env: Env) {
+        reentrancy::enter(&env);
+        recovery::execute_recovery(&env);
+        reentrancy::exit(&env);
+    }
+
+    /// Returns the currently pending recovery, if any.
+    pub fn recovery_get_pending(env: Env) -> Option<GuardianRecovery> {
+        recovery::get_pending_recovery(&env)
+    }
+
+    // =========================================================================
+    // #283 — Stellar DID Integration
+    // =========================================================================
+
+    /// Registers a DID document under `did_address`. Admin-only.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::NotAuthorized`] — caller is not admin.
+    /// * [`ErrorCode::InvalidConfiguration`] — document exceeds length limit.
+    pub fn did_register(env: Env, did_address: Address, document: String) {
+        did::register_did(&env, did_address, document);
+    }
+
+    /// Links an oracle source to a DID address. Admin-only.
+    pub fn did_link_source(env: Env, source: Address, did: Address, verified: bool) {
+        did::link_source_did(&env, source, did, verified);
+    }
+
+    /// Verifies a DID document exists on-chain.
+    pub fn did_verify(env: Env, did_address: Address) -> bool {
+        did::verify_did(&env, did_address)
+    }
+
+    /// Returns the DID document for a given DID address, or `None`.
+    pub fn did_get_document(env: Env, did_address: Address) -> Option<String> {
+        did::get_did_document(&env, did_address)
+    }
+
+    /// Returns the DID link for a source, or `None`.
+    pub fn did_get_source_link(env: Env, source: Address) -> Option<SourceDidLink> {
+        did::get_source_did(&env, source)
+    }
+
+    /// Returns all source-DID links.
+    pub fn did_get_all_source_links(env: Env) -> Vec<SourceDidLink> {
+        did::get_all_source_dids(&env)
+    }
+
+    // =========================================================================
+    // #282 — Bridge Oracle for Non-Stellar Assets
+    // =========================================================================
+
+    /// Registers a bridge oracle contract for a non-Stellar asset pair. Admin-only.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::NotAuthorized`] — caller is not admin.
+    /// * [`ErrorCode::InvalidConfiguration`] — validation fails.
+    pub fn bridge_register_oracle(env: Env, config: BridgeOracleConfig) {
+        bridge_oracle::register_bridge_oracle(&env, config);
+    }
+
+    /// Returns the bridge oracle configuration for an asset pair, or `None`.
+    pub fn bridge_get_oracle(env: Env, source_asset: Address, target_asset: Address) -> Option<BridgeOracleConfig> {
+        bridge_oracle::get_bridge_oracle(&env, source_asset, target_asset)
+    }
+
+    /// Submits a bridged price observation. Must be called by the bridge oracle contract.
+    ///
+    /// # Errors
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the bridge oracle.
+    /// * [`ErrorCode::InvalidConfiguration`] — price is non-positive.
+    pub fn bridge_submit_price(env: Env, source_asset: Address, target_asset: Address, price: i128, timestamp: u64) {
+        bridge_oracle::submit_bridged_price(&env, source_asset, target_asset, price, timestamp);
+    }
+
+    /// Returns the latest bridged price for an asset pair, or `None`.
+    pub fn bridge_get_price(env: Env, source_asset: Address, target_asset: Address) -> Option<BridgedPrice> {
+        bridge_oracle::get_bridged_price(&env, source_asset, target_asset)
+    }
+
+    /// Normalizes a raw bridge price into the oracle decimal scale.
+    pub fn bridge_normalize_price(env: Env, raw_price: i128, target_decimals: u32, config: BridgeOracleConfig) -> i128 {
+        bridge_oracle::normalize_bridged_price(&env, raw_price, target_decimals, &config)
+    }
+
+    // =========================================================================
+    // #285 — Ecosystem Metadata Registration
+    // =========================================================================
+
+    /// Registers the oracle contract in the Stellar ecosystem metadata registry. Admin-only.
+    pub fn metadata_register(env: Env, metadata: EcosystemMetadata) {
+        ecosystem_metadata::register_ecosystem_metadata(&env, metadata);
+    }
+
+    /// Updates the ecosystem metadata. Admin-only.
+    pub fn metadata_update(env: Env, metadata: EcosystemMetadata) {
+        ecosystem_metadata::update_ecosystem_metadata(&env, metadata);
+    }
+
+    /// Returns the ecosystem metadata, or `None`.
+    pub fn metadata_get(env: Env) -> Option<EcosystemMetadata> {
+        ecosystem_metadata::get_ecosystem_metadata(&env)
+    }
+
+    /// Registers a price feed in the ecosystem metadata directory. Admin-only.
+    pub fn metadata_register_feed(env: Env, feed: FeedMetadata) {
+        ecosystem_metadata::register_feed_metadata(&env, feed);
+    }
+
+    /// Returns all registered feed metadata.
+    pub fn metadata_list_feeds(env: Env) -> Vec<FeedMetadata> {
+        ecosystem_metadata::list_feed_metadata(&env)
+    }
+
+    /// Returns feed metadata for a specific asset, or `None`.
+    pub fn metadata_get_feed(env: Env, asset: Address) -> Option<FeedMetadata> {
+        ecosystem_metadata::get_feed_metadata(&env, asset)
+    }
 }
 
 #[cfg(test)]
@@ -3715,3 +4799,6 @@ mod finality_tests;
 
 #[cfg(test)]
 mod correlation_feature_tests;
+
+#[cfg(test)]
+mod did_bridge_metadata_tests;

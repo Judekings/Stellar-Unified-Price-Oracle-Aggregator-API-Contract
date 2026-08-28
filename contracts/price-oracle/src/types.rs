@@ -78,6 +78,8 @@ pub enum DataKey {
     SrcHeartbeat(Address),
     /// Inactive flag for a source.
     SrcInactive(Address),
+    /// Per-source deviation tolerance in basis points. Overrides global when set.
+    SrcDeviationTolerance(Address),
 
     // --- Asset registry (prefix: Asset) ---
     /// Existence flag for a registered asset (`true` when present).
@@ -108,6 +110,16 @@ pub enum DataKey {
     AssetCircuitBreakerLog(Address, u32),
     /// Configurable maximum number of assets that can be registered.
     MaxAssets,
+
+    // -------------------------------------------------------------------------
+    // #301: Automatic asset deregistration on inactivity
+    // -------------------------------------------------------------------------
+    /// Last ledger sequence number when a price was submitted for this asset.
+    AssetLastActivity(Address),
+    /// Inactivity timeout in ledgers for a specific asset (0 = use global default).
+    AssetInactivityTimeout(Address),
+    /// Global default inactivity timeout in ledgers (0 = disabled).
+    CfgInactivityTimeout,
 
     /// Boolean flag indicating whether the contract is paused.
     PauseFlag,
@@ -337,7 +349,6 @@ pub enum DataKey {
     // -------------------------------------------------------------------------
     // Additional keys for feature modules
     // -------------------------------------------------------------------------
-
     /// Per-asset minimum submission interval override.
     AssetMinSubmissionInterval(Address),
 
@@ -362,6 +373,12 @@ pub enum DataKey {
     AmmPool(Address),
     /// AMM maximum deviation basis points for an asset.
     AmmMaxDeviationBps(Address),
+    /// AMM weight configuration for aggregation inclusion.
+    AmmWeight(Address),
+    /// Stellar DEX pool reserves for an asset pair.
+    DexPool(Address, Address),
+    /// Soroswap pool configuration for an asset pair.
+    SoroswapPool(Address, Address),
 
     /// Challenge entries keyed by ID (#235).
     Challenge(u32),
@@ -459,6 +476,43 @@ pub enum DataKey {
     AuditLogHead,
 
     // -------------------------------------------------------------------------
+    // Pre-existing keys referenced by storage.rs/sources.rs/cross_chain_verify.rs
+    // but missing from this enum (build-blocking gap, restored here).
+    // -------------------------------------------------------------------------
+    /// Assets a source is authorized to submit prices for (#226 support).
+    SourceAssets(Address),
+    /// Ledger sequence of a source's last key rotation (#226 support).
+    SourceRotationLedger(Address),
+    /// Verification metadata for a source (#226 support).
+    SourceVerification(Address),
+    /// Whether cross-chain price verification is globally enabled (#226).
+    CrossChainVerificationEnabled,
+    /// Maximum allowed deviation (bps) between this chain and a reference chain (#226).
+    CrossChainDeviationThreshold,
+    /// Stored cross-chain price observation for (asset, oracle_chain) (#226).
+    CrossChainPrice(Address, Address),
+
+    // -------------------------------------------------------------------------
+    // #216: Off-chain signature-verified price submission
+    // -------------------------------------------------------------------------
+    /// Ed25519 public key registered by a source for pre-signed submissions.
+    SignedSubmitPubKey(Address),
+    /// Last accepted (strictly increasing) nonce for a source's signed submissions.
+    SignedSubmitNonce(Address),
+
+    // -------------------------------------------------------------------------
+    // #218: Configurable aggregation triggers
+    // -------------------------------------------------------------------------
+    /// Minimum seconds between time-triggered aggregations for an asset (0 = disabled).
+    TriggerTimeInterval(Address),
+    /// Number of new submissions required to auto-trigger aggregation (0 = disabled).
+    TriggerSubmissionThreshold(Address),
+    /// Submissions accumulated since the last trigger-driven aggregation for an asset.
+    TriggerSubmissionCount(Address),
+    /// Deviation in basis points that auto-triggers aggregation (0 = disabled).
+    TriggerDeviationBps(Address),
+    /// Unix timestamp of the last trigger-driven aggregation for an asset.
+    TriggerLastAggTime(Address),
     // #223: Price freeze mechanism for market emergencies
     // -------------------------------------------------------------------------
     /// Frozen price snapshot for an asset, present only while frozen (#223).
@@ -478,25 +532,37 @@ pub enum DataKey {
     NotificationEventTypes,
 
     // -------------------------------------------------------------------------
-    // #247 — History compaction
+    // History export / timelock priority
     // -------------------------------------------------------------------------
-    /// Maximum allowed price deviation in basis points before two adjacent history
-    /// entries are considered "different" for compaction purposes (u32).
-    /// Default: 0 means compaction is disabled.
-    CfgCompactionThresholdBps,
-    /// Compaction metadata for an asset: how many entries were original vs compacted.
-    CompactionMeta(Address),
+    /// Delay (ledgers) for Urgent priority operations.
+    TlUrgentDelay,
+    /// Delay (ledgers) for Normal priority operations (mirrors CfgTimelockDuration).
+    TlNormalDelay,
+    /// Delay (ledgers) for LongTerm priority operations.
+    TlLongTermDelay,
 
     // -------------------------------------------------------------------------
-    // #251 — History sharding (weekly time buckets)
+    // #283: Stellar DID Integration
     // -------------------------------------------------------------------------
-    /// One shard of price history entries for an asset in a given week bucket
-    /// (u32 = week index = ledger / LEDGERS_PER_WEEK). Stores `Vec<PriceHistoryEntry>`.
-    HistoryBucket(Address, u32),
-    /// Ordered list of week-bucket indices that have data for an asset.
-    HistoryBucketIndex(Address),
+    /// Stored DID document for a decentralized identity address.
+    DidDocument(Address),
+    /// Source address mapped to a DID address for identity verification.
+    SourceDid(Address),
+
+    // -------------------------------------------------------------------------
+    // #282: Bridge Oracle for Non-Stellar Assets
+    // -------------------------------------------------------------------------
+    /// Bridge oracle configuration for a (source_asset, target_asset) pair.
+    BridgeOracle(Address, Address),
+    /// Latest bridged price observation for an asset pair.
+    BridgedPrice(Address, Address),
+
+    // -------------------------------------------------------------------------
+    // #285: Ecosystem Metadata Registration
+    // -------------------------------------------------------------------------
+    /// Stellar ecosystem metadata registry entry.
+    EcosystemMetadata,
 }
-
 
 /// A price submission from a single oracle source for a specific asset.
 ///
@@ -853,6 +919,8 @@ pub struct PendingOperation {
     pub proposed_ledger: u32,
     /// Arbitrary encoded payload whose interpretation depends on `op_type`.
     pub data: Bytes,
+    /// Priority tier that determines the required delay before execution.
+    pub priority: OperationPriority,
 }
 
 /// A snapshot of the oracle's overall health, returned by `health_check()`.
@@ -905,7 +973,6 @@ pub struct AssetMetadataUpdate {
     pub decimals: Option<u32>,
     pub logo_uri: String,
 }
-
 
 /// A single admin operation within a batch, identified by type and its encoded payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1190,6 +1257,89 @@ pub struct RelayerInfo {
     pub approved_at_ledger: u32,
 }
 
+/// A single (source, asset, price, timestamp) leg of a batch relayed submission (#264).
+///
+/// Each leg is independently authorized by its `source` — the relayer bundles one
+/// pre-signed authorization entry per leg alongside its own signature. `priority_fee`
+/// implements the relayer fee market (#266): legs must be ordered by non-increasing
+/// `priority_fee` within the batch, and the source's signature covers this exact value,
+/// so a relayer cannot alter it after the fact without invalidating the signature.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct RelayedSubmission {
+    /// Address of the oracle source whose price is being relayed.
+    pub source: Address,
+    /// Contract address of the asset being priced.
+    pub asset: Address,
+    /// Raw price value scaled by `10^decimals`. Must be > 0.
+    pub price: i128,
+    /// Unix timestamp (seconds) of the price observation.
+    pub timestamp: u64,
+    /// Priority fee (in stroops) the source is willing to pay for prioritized processing.
+    pub priority_fee: u128,
+}
+
+// =============================================================================
+// #265 — Relayer Performance Bonds
+// =============================================================================
+
+/// Reasons a relayer failure incident may be recorded, used as slash grounds (#265).
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum RelayerFailureReason {
+    /// Relayer submitted a price on behalf of a source without valid authorization.
+    UnauthorizedPrice = 0,
+    /// Relayer submitted an otherwise invalid/rejected price.
+    InvalidSubmission = 1,
+    /// Any other operator-attested misbehavior.
+    Other = 2,
+}
+
+// =============================================================================
+// #267 — Relayer Dashboard
+// =============================================================================
+
+/// Per-asset submission breakdown for a relayer, part of [`RelayerDashboard`] (#267).
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct RelayerAssetStat {
+    /// Asset contract address.
+    pub asset: Address,
+    /// Number of successful submissions relayed for this asset.
+    pub submissions: u64,
+}
+
+/// Aggregated operational dashboard for a relayer (#267).
+///
+/// Returned by `get_relayer_dashboard`. Combines volume, accuracy, latency, fee/reward
+/// earnings, and a comparative percentile rank against every other approved relayer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct RelayerDashboard {
+    /// The relayer this dashboard describes.
+    pub relayer: Address,
+    /// Total successful relayed submissions (single + batch legs).
+    pub total_submissions: u64,
+    /// Total reported failure incidents (see [`RelayerFailureReason`]).
+    pub failed_submissions: u32,
+    /// Success rate in basis points: `10_000 * successful / (successful + failed)`.
+    pub success_rate_bps: u32,
+    /// Estimated submissions per day, averaged over the relayer's approved lifetime.
+    pub submissions_per_day: u64,
+    /// Average latency in seconds between observation timestamp and ledger close time.
+    pub avg_latency_seconds: u64,
+    /// Accumulated flat + priority fee earnings (in stroops).
+    pub fee_earnings: i128,
+    /// Accumulated accuracy-weighted reward earnings (in stroops).
+    pub reward_earnings: i128,
+    /// Currently deposited performance bond (in stroops).
+    pub bond_deposited: i128,
+    /// Percentile rank (0-100) of `total_submissions` among all approved relayers.
+    pub percentile_rank: u32,
+    /// Per-asset submission breakdown.
+    pub per_asset: Vec<RelayerAssetStat>,
+}
+
 // =============================================================================
 // Cross-reference oracle checks
 // =============================================================================
@@ -1300,9 +1450,6 @@ pub struct DecentralizationReport {
     pub jurisdiction_hhi: u32,
     pub overall_score: u32,
 }
-
-
-
 
 // =============================================================================
 // Missing types required by feature modules
@@ -1478,6 +1625,24 @@ pub struct MultiSigOperation {
     pub next_op_id: u32,
 }
 
+/// A guardian-initiated admin key recovery process (#245).
+///
+/// Stored under [`DataKey::PendingRecovery`] while a recovery is in flight.
+/// Removed once cancelled by the admin or executed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct GuardianRecovery {
+    /// Address that guardians are proposing to install as the new admin.
+    pub new_admin: Address,
+    /// Guardians that have approved this recovery so far.
+    pub approvals: Vec<Address>,
+    /// Ledger sequence number when the initiating guardian first proposed this recovery.
+    pub initiated_ledger: u32,
+    /// Ledger sequence number when the N-of-M guardian threshold was reached and the
+    /// cancellation-window delay started. `0` means the threshold has not been reached yet.
+    pub ready_ledger: u32,
+}
+
 /// Per-asset decimal precision configuration (#227).
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
@@ -1586,6 +1751,63 @@ pub struct ZkPriceAttestation {
     pub proof: Groth16Proof,
 }
 
+/// Snapshot of core global oracle configuration parameters.
+///
+/// Captured before each successful core-parameter mutation so an admin can
+/// roll back to a known-good state via `rollback_config`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ConfigSnapshot {
+    /// Monotonically increasing snapshot version (never reused).
+    pub version: u32,
+    /// Ledger sequence when this snapshot was taken.
+    pub ledger: u32,
+    /// Unix timestamp when this snapshot was taken.
+    pub timestamp: u64,
+    /// Minimum contributing sources required for aggregation.
+    pub min_sources_required: u32,
+    /// Maximum retained price-history entries per asset.
+    pub max_history_length: u32,
+    /// SEP-40 resolution window in seconds.
+    pub resolution: u32,
+    /// Global decimal precision.
+    pub decimals: u32,
+    /// Human-readable oracle description.
+    pub description: String,
+    /// Aggregation method discriminant.
+    pub aggregation_method: u32,
+    /// Maximum allowed submission timestamp skew in seconds.
+    pub timestamp_threshold: u64,
+    /// Maximum allowed price deviation in basis points.
+    pub max_price_deviation: u32,
+    /// Circuit-breaker trip threshold in basis points.
+    pub circuit_breaker_threshold: u32,
+    /// Heartbeat interval in seconds.
+    pub heartbeat_interval: u64,
+    /// Per-asset history cap.
+    pub max_history_per_asset: u32,
+    /// Maximum events emitted per call.
+    pub max_events_per_call: u32,
+    /// Maximum sources used during aggregation (`0` = unlimited).
+    pub max_aggregation_sources: u32,
+    /// Aggregation cooldown in ledgers.
+    pub aggregation_cooldown: u32,
+    /// Minimum submission interval in ledgers.
+    pub min_submission_interval: u32,
+    /// Whether historical price interpolation is enabled.
+    pub interpolation_enabled: bool,
+    /// Maximum registered oracle sources (`0` = unlimited).
+    pub max_sources: u32,
+    /// Query rate limit per ledger.
+    pub query_rate_limit: u32,
+    /// Maximum registered assets.
+    pub max_assets: u32,
+    /// Whether the contract is paused.
+    pub paused: bool,
+    /// Timelock delay in ledgers.
+    pub timelock_duration: u32,
+}
+
 /// Audit log entry for admin actions (#239).
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
@@ -1650,6 +1872,22 @@ pub struct CrossChainRelayConfig {
     pub merkle_path_bits: u32,
 }
 
+/// A price observation for an asset fetched from the same oracle on another chain (#226).
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct CrossChainPriceEntry {
+    /// Raw price value scaled by `10^decimals`.
+    pub price: i128,
+    /// Decimal precision of `price`.
+    pub decimals: u32,
+    /// Identifier of the source chain (e.g. `"ethereum"`).
+    pub chain_id: String,
+    /// Local ledger sequence number when this observation was recorded.
+    pub ledger: u32,
+    /// Unix timestamp of the observation on the source chain.
+    pub timestamp: u64,
+}
+
 /// A batch item for state channel high-frequency updates.
 /// Each item carries a price update with strict nonce ordering.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1664,64 +1902,286 @@ pub struct BatchItem {
 }
 
 // =============================================================================
-// #247 — History Compaction
+// History Export (#export-history)
 // =============================================================================
 
-/// Metadata recorded after compaction runs for an asset.
+/// A single exported price history entry for off-chain archiving.
 ///
-/// Stored under [`DataKey::CompactionMeta`] keyed by asset address and updated
-/// each time `compact_history` runs (admin) or on-write compaction occurs.
+/// Mirrors [`PriceHistoryEntry`] but includes the asset address so the export
+/// bundle is self-contained.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
-pub struct CompactionMetadata {
-    /// Total entries that existed before the most-recent compaction pass.
-    pub original_count: u32,
-    /// Number of entries retained after compaction (distinct price snapshots).
-    pub compacted_count: u32,
-    /// Ledger at which the most-recent compaction was executed.
-    pub last_compaction_ledger: u32,
-    /// Threshold in basis points used for the most-recent compaction.
-    pub threshold_bps: u32,
-}
-
-// =============================================================================
-// #253 — Storage Budget Calculator
-// =============================================================================
-
-/// Estimated storage cost and usage breakdown for a single asset.
-///
-/// Returned by `get_storage_budget(asset)`. All cost figures are rough estimates
-/// based on known Soroban ledger-entry fees; they are advisory, not guaranteed.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[contracttype]
-pub struct StorageBudget {
-    /// Asset address this budget refers to.
+pub struct ExportedEntry {
+    /// Asset address.
     pub asset: Address,
-    /// Current number of price history entries stored for this asset.
-    pub entry_count: u32,
-    /// Estimated TTL cost in stroops to keep all current entries alive for one month
-    /// (30 × 17,280 ledgers ≈ 518,400 ledgers at ~5 s/ledger).
-    pub estimated_ttl_costs: i128,
-    /// Projected monthly storage cost in stroops, factoring in write and rent fees.
-    pub projected_monthly_cost: i128,
-    /// Estimated bytes consumed by this asset's history entries.
-    pub estimated_bytes: u32,
+    /// Aggregated price scaled by `10^decimals`.
+    pub price: i128,
+    /// Unix timestamp of the snapshot.
+    pub timestamp: u64,
+    /// Ledger sequence number of the snapshot.
+    pub ledger: u32,
+    /// Number of sources that contributed.
+    pub num_sources: u32,
+    /// Whether this entry was produced by interpolation.
+    pub is_interpolated: bool,
 }
 
-/// Aggregate storage budget across all registered assets.
+/// Result returned by `export_history`.
 ///
-/// Returned by `get_total_storage_budget()`.
+/// Contains the page of entries, a simple XOR-based data hash over all included
+/// entries (for quick integrity verification off-chain), and pagination state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
-pub struct TotalStorageBudget {
-    /// Number of registered assets included in this report.
-    pub asset_count: u32,
-    /// Sum of `entry_count` across all assets.
-    pub total_entry_count: u32,
-    /// Sum of `estimated_ttl_costs` across all assets (stroops/month).
-    pub total_estimated_ttl_costs: i128,
-    /// Sum of `projected_monthly_cost` across all assets (stroops/month).
-    pub total_projected_monthly_cost: i128,
-    /// Sum of `estimated_bytes` across all assets.
-    pub total_estimated_bytes: u32,
+pub struct ExportedHistorySnapshot {
+    /// The exported price history entries (up to `limit` entries).
+    pub entries: Vec<ExportedEntry>,
+    /// Simple XOR-fold hash of all entry prices — a lightweight integrity token.
+    /// Off-chain archivers can recompute this from the entries and compare.
+    pub data_hash: u64,
+    /// Ledger of the first entry in this page (0 when empty).
+    pub from_ledger: u32,
+    /// Ledger of the last entry in this page (0 when empty).
+    pub to_ledger: u32,
+    /// Total number of recorded ledgers available for this asset.
+    pub total_available: u32,
+    /// Cursor to pass as `from_ledger` to fetch the next page (`0` when no more pages).
+    pub next_cursor: u32,
 }
+
+// =============================================================================
+// Timelock Priority Queues
+// =============================================================================
+
+/// Priority tier for a timelock operation.
+///
+/// Each tier has its own configurable delay (in ledgers).  Lower discriminant
+/// values represent more urgent tiers so that numeric comparisons are intuitive.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum OperationPriority {
+    /// Immediate-ish execution with multi-sig co-sign requirement.
+    /// Default delay: 1 ledger.
+    Urgent = 0,
+    /// Standard governance delay.
+    /// Default delay: 10 ledgers (matches the pre-existing default).
+    Normal = 1,
+    /// Extended delay for critical, protocol-level changes.
+    /// Default delay: 100 ledgers.
+    LongTerm = 2,
+}
+
+// =============================================================================
+// Batch Dry-Run Simulation
+// =============================================================================
+
+/// Warning flags that may be set on a simulated operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum SimulationWarning {
+    /// No warnings.
+    None = 0,
+    /// The operation would change a parameter to an extreme value.
+    ExtremeValue = 1,
+    /// The operation would set min_sources below 2, weakening security.
+    LowMinSources = 2,
+    /// The operation would set max_history to a very large value.
+    LargeHistory = 3,
+    /// The operation type is unrecognised in the simulator.
+    UnknownOpType = 4,
+    /// The operation data is too short to decode.
+    InvalidData = 5,
+}
+
+/// Result for a single operation in a simulated batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct OperationSimulationResult {
+    /// Zero-based index of this operation in the batch.
+    pub index: u32,
+    /// Numeric `op_type` discriminant (mirrors [`OperationType`]).
+    pub op_type: u32,
+    /// Human-readable description of what the operation would change.
+    pub description: String,
+    /// `true` when the operation would succeed given current contract state.
+    pub would_succeed: bool,
+    /// Any warnings raised by the simulation.
+    pub warning: SimulationWarning,
+}
+
+/// Aggregate result of `simulate_batch`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct BatchSimulationResult {
+    /// Per-operation simulation results.
+    pub results: Vec<OperationSimulationResult>,
+    /// Total number of operations in the batch.
+    pub total_ops: u32,
+    /// Number of operations that would succeed.
+    pub would_succeed_count: u32,
+    /// Number of operations that raised at least one warning.
+    pub warning_count: u32,
+    /// `true` when *all* operations would succeed (the batch is safe to submit).
+    pub all_succeed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum OperationStatus {
+    Pending,
+    Executed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct Operation {
+    pub id: String,
+    pub status: OperationStatus,
+    pub depends_on: Vec<String>,
+}
+
+// ---- Pending operation types ----
+
+/// The kind of administrative action captured in a pending operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum OperationKind {
+    AddSource,
+    RemoveSource,
+    RegisterAsset,
+    UnregisterAsset,
+    SetMinSources,
+    SetMaxHistory,
+    SetDecimals,
+    SetDescription,
+}
+
+/// A pending operation waiting to be executed or expired.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PendingOperation {
+    /// Unique monotonic id (ledger sequence at creation).
+    pub id: u64,
+    pub kind: OperationKind,
+    /// JSON-style serialized args stored as a String for simplicity.
+    pub args: String,
+    /// Ledger sequence at which this operation was created.
+    pub created_at_ledger: u32,
+    /// Ledger sequence after which this operation is expired and unexecutable.
+    pub expires_at_ledger: u32,
+    /// Whether this operation has been executed already.
+    pub executed: bool,
+}
+
+// ---- Template registry types ----
+
+/// A single parameterized step inside a template.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct TemplateStep {
+    pub kind: OperationKind,
+    /// Human-readable description of this step.
+    pub description: String,
+}
+
+/// A named, reusable sequence of operation steps.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct OperationTemplate {
+    pub name: Symbol,
+    pub description: String,
+    pub steps: Vec<TemplateStep>,
+    pub created_at_ledger: u32,
+}
+
+// =============================================================================
+// #278 — Contract State Introspection
+// =============================================================================
+
+/// Serializable contract configuration snapshot for `oracle-state-dump`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct StateDump {
+    pub admin: Address,
+    pub description: String,
+    pub min_sources_required: u32,
+    pub max_history_length: u32,
+    pub decimals: u32,
+    pub resolution: u32,
+    pub timestamp_threshold: u64,
+    pub max_deviation_bps: u32,
+    pub heartbeat_interval: u64,
+}
+
+/// Statistics computed from live contract state for `oracle-state-analyze`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct StateAnalysis {
+    pub admin: Address,
+    pub decimals: u32,
+    pub min_sources_required: u32,
+    pub max_history_length: u32,
+    pub registered_assets: u32,
+    pub registered_sources: u32,
+    pub aggregate_count: u32,
+    pub history_depth_avg: u32,
+}
+
+/// Field-level diff between two contract snapshots.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct StateDiffEntry {
+    pub field: String,
+    pub left: String,
+    pub right: String,
+}
+
+/// Top-level diff container returned by `oracle-state-diff`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct StateDiff {
+    pub contract_a: String,
+    pub contract_b: String,
+    pub entries: Vec<StateDiffEntry>,
+}
+
+// =============================================================================
+// #280 — Stellar DEX Integration
+// =============================================================================
+
+/// A price observation read from a Stellar DEX liquidity pool.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct DexPrice {
+    pub asset: Address,
+    pub price: i128,
+    pub reserve_x: i128,
+    pub reserve_y: i128,
+    pub timestamp: u64,
+}
+
+// =============================================================================
+// #281 — Soroswap / AMM Integration
+// =============================================================================
+
+/// AMM pool weight configuration for aggregation inclusion.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct AmmWeightConfig {
+    pub asset: Address,
+    pub weight_bps: u32,
+    pub enabled: bool,
+}
+
+/// Soroswap pool metadata used to derive a price feed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct SoroswapPool {
+    pub asset_a: Address,
+    pub asset_b: Address,
+    pub reserve_a: i128,
+    pub reserve_b: i128,
+    pub fee_bps: u32,
+    pub enabled: bool,
+}
+

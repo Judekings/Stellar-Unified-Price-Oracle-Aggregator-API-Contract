@@ -24,7 +24,7 @@
 //! `max_deviation_bps` the swap is reverted.
 
 use crate::storage::{LEDGER_BUMP, LEDGER_THRESHOLD};
-use crate::types::{AmmPool, DataKey, ErrorCode};
+use crate::types::{AmmPool, AmmWeightConfig, DataKey, ErrorCode, SoroswapPool};
 use soroban_sdk::{panic_with_error, symbol_short, Address, Env, Symbol};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -388,4 +388,108 @@ pub fn set_amm_max_deviation_bps(env: &Env, bps: u32) {
 /// Returns the current AMM max-deviation setting (basis points). Default: 500.
 pub fn get_amm_max_deviation_bps(env: &Env) -> u32 {
     read_max_deviation_bps(env)
+}
+
+// -----------------------------------------------------------------------------
+// #281 — Soroswap Integration
+// -----------------------------------------------------------------------------
+
+/// Sets the AMM weight configuration for an asset. Admin-only.
+///
+/// # Panics
+///
+/// * [`ErrorCode::NotAuthorized`]        — caller is not admin.
+/// * [`ErrorCode::InvalidConfiguration`] — `weight_bps > 10_000`.
+pub fn set_amm_weight(env: &Env, asset: Address, weight_bps: u32, enabled: bool) {
+    let admin = crate::storage::get_admin(env);
+    admin.require_auth();
+
+    if weight_bps > 10_000 {
+        panic_with_error!(env, ErrorCode::InvalidConfiguration);
+    }
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::AmmWeight(asset.clone()), &AmmWeightConfig { asset, weight_bps, enabled });
+}
+
+/// Returns the AMM weight configuration for an asset, or `None` if not set.
+pub fn get_amm_weight(env: &Env, asset: Address) -> Option<AmmWeightConfig> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AmmWeight(asset))
+}
+
+/// Reads a Soroswap pool price for an asset pair.
+///
+/// Returns the spot price derived from pool reserves using the constant-product formula.
+/// Returns `None` if the pool is not registered or disabled.
+pub fn read_soroswap_price(env: &Env, asset_a: Address, asset_b: Address) -> Option<i128> {
+    let key = DataKey::SoroswapPool(asset_a.clone(), asset_b.clone());
+    let pool: Option<SoroswapPool> = env.storage().persistent().get(&key);
+    match pool {
+        Some(p) if p.enabled => {
+            if p.reserve_a <= 0 || p.reserve_b <= 0 {
+                return None;
+            }
+            let scale: u128 = 1_000_000_000_000_000_000; // 1e18
+            let price = (p.reserve_b as u128)
+                .saturating_mul(scale)
+                .saturating_div(p.reserve_a as u128);
+            Some(price as i128)
+        }
+        _ => None,
+    }
+}
+
+/// Registers a Soroswap pool configuration. Admin-only.
+///
+/// # Panics
+///
+/// * [`ErrorCode::NotAuthorized`]        — caller is not admin.
+/// * [`ErrorCode::InvalidConfiguration`] — either reserve is ≤ 0.
+pub fn register_soroswap_pool(
+    env: &Env,
+    asset_a: Address,
+    asset_b: Address,
+    reserve_a: i128,
+    reserve_b: i128,
+    fee_bps: u32,
+) {
+    let admin = crate::storage::get_admin(env);
+    admin.require_auth();
+
+    if reserve_a <= 0 || reserve_b <= 0 {
+        panic_with_error!(env, ErrorCode::InvalidConfiguration);
+    }
+
+    env.storage().persistent().set(
+        &DataKey::SoroswapPool(asset_a.clone(), asset_b.clone()),
+        &SoroswapPool {
+            asset_a,
+            asset_b,
+            reserve_a,
+            reserve_b,
+            fee_bps,
+            enabled: true,
+        },
+    );
+}
+
+/// Enables or disables a Soroswap pool. Admin-only.
+pub fn set_soroswap_pool_status(env: &Env, asset_a: Address, asset_b: Address, enabled: bool) {
+    let admin = crate::storage::get_admin(env);
+    admin.require_auth();
+
+    let key = DataKey::SoroswapPool(asset_a.clone(), asset_b.clone());
+    let pool: Option<SoroswapPool> = env.storage().persistent().get(&key);
+    if let Some(mut p) = pool {
+        p.enabled = enabled;
+        env.storage().persistent().set(&key, &p);
+    }
+}
+
+/// Returns the Soroswap pool configuration, or `None` if not found.
+pub fn get_soroswap_pool(env: &Env, asset_a: Address, asset_b: Address) -> Option<SoroswapPool> {
+    env.storage().persistent().get(&DataKey::SoroswapPool(asset_a, asset_b))
 }

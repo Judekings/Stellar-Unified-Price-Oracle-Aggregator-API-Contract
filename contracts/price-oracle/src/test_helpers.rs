@@ -46,7 +46,8 @@ pub fn register_test_asset(e: &Env, client: &PriceOracleContractClient<'_>) -> A
     asset
 }
 
-/// Submits a price from the given source for the given asset.
+/// Submits a price from the given source for the given asset, with an explicit nonce.
+/// Use incrementing nonce values (1, 2, 3, …) for the same source across multiple submissions.
 pub fn submit_test_price(
     client: &PriceOracleContractClient<'_>,
     source: &Address,
@@ -54,7 +55,19 @@ pub fn submit_test_price(
     price: i128,
     timestamp: u64,
 ) {
-    client.submit_price(source, asset, &price, &timestamp);
+    client.submit_price(source, asset, &price, &timestamp, &1u64);
+}
+
+/// Like submit_test_price but with an explicit nonce — use for repeated submissions from the same source.
+pub fn submit_test_price_n(
+    client: &PriceOracleContractClient<'_>,
+    source: &Address,
+    asset: &Address,
+    price: i128,
+    timestamp: u64,
+    nonce: u64,
+) {
+    client.submit_price(source, asset, &price, &timestamp, &nonce);
 }
 
 /// Creates an initialized contract with N sources and M assets; sets min_sources to N.

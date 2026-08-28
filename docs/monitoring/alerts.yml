@@ -1,0 +1,67 @@
+# Prometheus alerting rules for the Stellar Unified Price Oracle.
+# Load into Prometheus via `rule_files:` and pair with the Grafana dashboard
+# at docs/monitoring/grafana-dashboard.json. Thresholds documented in
+# docs/monitoring-setup.md#3-alert-thresholds-and-severity-levels.
+groups:
+  - name: oracle
+    rules:
+      - alert: OracleSourceDown
+        expr: rate(oracle_price_submissions_total[15m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle source {{ $labels.source_name }} is not submitting"
+
+      - alert: OracleAllSourcesDown
+        expr: oracle_registered_sources_total == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No registered oracle sources — aggregation cannot proceed"
+
+      - alert: OracleInsufficientSources
+        expr: rate(oracle_errors_total{error_name="InsufficientSources"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Oracle aggregation failing — not enough active sources"
+
+      - alert: OracleStalePriceData
+        expr: time() - oracle_latest_price_timestamp > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle price for {{ $labels.asset }} has not updated in over 600s"
+
+      - alert: OraclePriceSpike
+        expr: abs(oracle_price_delta_ratio) > 0.10
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle price for {{ $labels.asset }} moved more than 10% since last reading"
+
+      - alert: OracleUnauthorizedAttempt
+        expr: rate(oracle_errors_total{error_name="NotAuthorized"}[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated rate of unauthorized calls against the oracle contract"
+
+      - alert: OracleAdminChanged
+        expr: increase(oracle_config_change_events_total{event_type="AdminChanged"}[1m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Oracle admin address changed — verify this was intentional"
+
+      - alert: OracleContractUpgraded
+        expr: increase(oracle_config_change_events_total{event_type="ContractUpgraded"}[1m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Oracle contract upgraded — verify wasm hash"
