@@ -4643,3 +4643,6 @@ mod did_bridge_metadata_tests;
 
 #[cfg(test)]
 mod issue_307_alert_rules_tests;
+
+#[cfg(test)]
+mod issue_308_health_monitoring_tests;
