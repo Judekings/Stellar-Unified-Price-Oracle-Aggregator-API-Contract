@@ -1,6 +1,7 @@
 use soroban_sdk::{panic_with_error, Address, Env};
 
 use crate::admin::{get_decimals, get_max_history_length, get_timestamp_threshold};
+use crate::history::{remove_history_shard_entry, should_skip_on_write, write_history_shard};
 use crate::events::{
     PriceProposalCreatedEvent, PriceProposalDisputedEvent, PriceProposalResolvedEvent,
 };
@@ -61,12 +62,19 @@ fn write_price_snapshot(
     current_ledger: u32,
     decimals: u32,
 ) {
+    let prev_version: u32 = env
+        .storage()
+        .persistent()
+        .get::<_, AggregatePrice>(&DataKey::Aggregate(asset.clone()))
+        .map(|a| if price != a.price { a.version.saturating_add(1) } else { a.version })
+        .unwrap_or(0);
     let aggregate = AggregatePrice {
         price,
         timestamp,
         num_sources,
         decimals,
         is_override: false,
+        version: prev_version,
     };
     env.storage()
         .persistent()
@@ -84,10 +92,6 @@ fn write_price_snapshot(
         num_sources,
         is_interpolated: false,
     };
-    env.storage().temporary().set(
-        &DataKey::PriceHistory(asset.clone(), current_ledger),
-        &history_entry,
-    );
 
     let ledgers_key = DataKey::PriceHistoryLedgers(asset.clone());
     let mut ledger_list: soroban_sdk::Vec<u32> = env
@@ -95,9 +99,17 @@ fn write_price_snapshot(
         .persistent()
         .get(&ledgers_key)
         .unwrap_or(soroban_sdk::Vec::new(env));
-    if ledger_list.len() == 0 || ledger_list.get_unchecked(ledger_list.len() - 1) != current_ledger
-    {
-        ledger_list.push_back(current_ledger);
+    if !should_skip_on_write(env, asset, price) {
+        env.storage().temporary().set(
+            &DataKey::PriceHistory(asset.clone(), current_ledger),
+            &history_entry,
+        );
+        if ledger_list.len() == 0
+            || ledger_list.get_unchecked(ledger_list.len() - 1) != current_ledger
+        {
+            ledger_list.push_back(current_ledger);
+        }
+        write_history_shard(env, asset, &history_entry);
     }
 
     let max_history = get_max_history_length(env);
@@ -107,6 +119,7 @@ fn write_price_snapshot(
         env.storage()
             .temporary()
             .remove(&DataKey::PriceHistory(asset.clone(), oldest_ledger));
+        remove_history_shard_entry(env, asset, oldest_ledger);
     }
 
     env.storage().persistent().set(&ledgers_key, &ledger_list);

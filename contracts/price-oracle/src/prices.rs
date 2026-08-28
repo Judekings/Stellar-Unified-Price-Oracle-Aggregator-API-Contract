@@ -16,14 +16,15 @@ use crate::events::{
     SourceNonCompliantEvent, SourcesInsufficientEvent,
 };
 use crate::pause::check_not_paused;
+use crate::history::{remove_history_shard_entry, should_skip_on_write, write_history_shard};
 use crate::storage::{
     check_registered_asset, check_source, check_source_asset, compute_confidence_bps,
     compute_mean, compute_median, compute_trimmed_mean, compute_vwap, get_admin, is_subscribed,
     read_oracle_sources, sort_prices, LEDGER_BUMP, LEDGER_THRESHOLD,
 };
 use crate::types::{
-    AggregatePrice, Asset, BftAggregationMethod, DataKey, ErrorCode, OracleSources, PriceData,
-    PriceEntry, PriceHistoryEntry, PriceOverrideEntry, TwapMethod,
+    AggregatePrice, Asset, BftAggregationMethod, CompactionMetadata, DataKey, ErrorCode,
+    OracleSources, PriceData, PriceEntry, PriceHistoryEntry, PriceOverrideEntry, TwapMethod,
 };
 
 fn build_candidate_aggregate(
@@ -101,6 +102,7 @@ fn build_candidate_aggregate(
             num_sources: contributing_sources,
             decimals,
             is_override: false,
+            version: 0,
         })
     } else {
         None
@@ -252,6 +254,7 @@ fn validate_price_submission(
                 num_sources: 0,
                 decimals,
                 is_override: false,
+                version: 0,
             });
 
         if prev_aggregate.price > 0 {
@@ -597,7 +600,15 @@ fn aggregate_asset(env: &Env, asset: &Address, current_ledger: u32, decimals: u3
                     num_sources: 0,
                     decimals,
                     is_override: false,
+                    version: 0,
                 });
+
+        // Increment version only when the price actually changes (#252).
+        let new_version = if median_price != prev_aggregate.price {
+            prev_aggregate.version.saturating_add(1)
+        } else {
+            prev_aggregate.version
+        };
 
         let aggregate = AggregatePrice {
             price: median_price,
@@ -605,6 +616,7 @@ fn aggregate_asset(env: &Env, asset: &Address, current_ledger: u32, decimals: u3
             num_sources: contributing_sources,
             decimals,
             is_override: false,
+            version: new_version,
         };
         env.storage()
             .persistent()
@@ -634,6 +646,7 @@ fn aggregate_asset(env: &Env, asset: &Address, current_ledger: u32, decimals: u3
             num_sources: contributing_sources,
             is_interpolated: false,
         };
+        let skip_history = should_skip_on_write(env, asset, median_price);
         env.storage().temporary().set(
             &DataKey::PriceHistory(asset.clone(), current_ledger),
             &history_entry,
@@ -647,10 +660,17 @@ fn aggregate_asset(env: &Env, asset: &Address, current_ledger: u32, decimals: u3
             .persistent()
             .get(&ledgers_key)
             .unwrap_or(soroban_sdk::Vec::new(env));
-        if ledger_list.len() == 0
-            || ledger_list.get_unchecked(ledger_list.len() - 1) != current_ledger
-        {
-            ledger_list.push_back(current_ledger);
+        if !skip_history {
+            if ledger_list.len() == 0
+                || ledger_list.get_unchecked(ledger_list.len() - 1) != current_ledger
+            {
+                ledger_list.push_back(current_ledger);
+            }
+            write_history_shard(env, asset, &history_entry);
+        } else {
+            env.storage()
+                .temporary()
+                .remove(&DataKey::PriceHistory(asset.clone(), current_ledger));
         }
 
         // Issue #92: check event budget before emitting prune events.
@@ -674,6 +694,7 @@ fn aggregate_asset(env: &Env, asset: &Address, current_ledger: u32, decimals: u3
             env.storage()
                 .temporary()
                 .remove(&DataKey::PriceHistory(asset.clone(), oldest_ledger));
+            remove_history_shard_entry(env, asset, oldest_ledger);
             HistoryPrunedEvent {
                 asset: asset.clone(),
                 pruned_ledger: oldest_ledger,
@@ -700,6 +721,7 @@ fn aggregate_asset(env: &Env, asset: &Address, current_ledger: u32, decimals: u3
             env.storage()
                 .temporary()
                 .remove(&DataKey::PriceHistory(asset.clone(), oldest_ledger));
+            remove_history_shard_entry(env, asset, oldest_ledger);
             HistoryPerAssetPrunedEvent {
                 asset: asset.clone(),
                 pruned_ledger: oldest_ledger,
@@ -710,6 +732,17 @@ fn aggregate_asset(env: &Env, asset: &Address, current_ledger: u32, decimals: u3
         }
 
         env.storage().persistent().set(&ledgers_key, &ledger_list);
+        if skip_history {
+            let metadata = CompactionMetadata {
+                original_count: ledger_list.len().saturating_add(1),
+                compacted_count: ledger_list.len(),
+                last_compaction_ledger: current_ledger,
+                threshold_bps: crate::history::get_compaction_threshold_bps(env),
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::CompactionMeta(asset.clone()), &metadata);
+        }
 
         // Issue #92: only emit aggregation event if within budget.
         if event_count < max_events {
@@ -896,12 +929,7 @@ fn compute_twap_window(
     let mut ledger = current_ledger;
     while ledger > 0 {
         ledger -= 1;
-        let hist_key = DataKey::PriceHistory(asset.clone(), ledger);
-        if let Some(entry) = env
-            .storage()
-            .temporary()
-            .get::<_, PriceHistoryEntry>(&hist_key)
-        {
+        if let Some(entry) = crate::history::read_history_entry(env, asset, ledger) {
             let last = snapshots.get_unchecked(snapshots.len() - 1);
             if entry.ledger != last.0 {
                 snapshots.push_back((entry.ledger, entry.price));
@@ -1029,6 +1057,7 @@ fn compute_twap_fallback(env: &Env, asset: &Address) -> Option<AggregatePrice> {
         num_sources: 0,
         decimals,
         is_override: false,
+        version: 0,
     })
 }
 
@@ -1057,6 +1086,7 @@ pub fn get_price(env: &Env, asset: Address, max_age: u64) -> Option<AggregatePri
             num_sources: 0,
             decimals: frozen.decimals,
             is_override: false,
+            version: 0,
         });
     }
 
@@ -1080,6 +1110,7 @@ pub fn get_price(env: &Env, asset: Address, max_age: u64) -> Option<AggregatePri
                 num_sources: 0,
                 decimals,
                 is_override: true,
+                version: 0,
             });
         } else {
             // Override has expired
@@ -1132,7 +1163,35 @@ pub fn get_price(env: &Env, asset: Address, max_age: u64) -> Option<AggregatePri
     Some(result)
 }
 
-pub fn get_price_with_confidence(env: &Env, asset: Address) -> Option<(AggregatePrice, u32)> {
+/// Returns the current aggregated price together with its monotonically-incrementing
+/// version counter for the given asset (#252).
+///
+/// The version allows consumers to detect price changes by comparing a lightweight
+/// `u32` rather than the full `i128` price value. The version starts at 0 after
+/// the first aggregation and increments by 1 each time the price changes.
+///
+/// # Panics
+/// * [`ErrorCode::AssetNotRegistered`] — asset is not registered.
+/// * [`ErrorCode::NoData`] — no aggregate exists yet for the asset.
+pub fn get_aggregate_with_version(
+    env: &Env,
+    asset: Address,
+) -> crate::types::VersionedAggregatePrice {
+    check_registered_asset(env, &asset);
+    let key = DataKey::Aggregate(asset.clone());
+    let aggregate: AggregatePrice = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| panic_with_error!(env, ErrorCode::NoData));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP);
+    let version = aggregate.version;
+    crate::types::VersionedAggregatePrice { aggregate, version }
+}
+
+
     let aggregate = get_price(env, asset.clone(), 0)?;
 
     let mut prices: Vec<i128> = Vec::new(env);
@@ -1262,12 +1321,7 @@ pub fn price(env: &Env, asset: Asset, timestamp: u64) -> Option<PriceData> {
     let start = current_ledger.saturating_sub(1000);
     let mut ledger = current_ledger;
     loop {
-        let hist_key = DataKey::PriceHistory(addr.clone(), ledger);
-        if let Some(entry) = env
-            .storage()
-            .temporary()
-            .get::<_, PriceHistoryEntry>(&hist_key)
-        {
+        if let Some(entry) = crate::history::read_history_entry(env, &addr, ledger) {
             if entry.timestamp <= timestamp {
                 return Some(PriceData {
                     price: entry.price,
@@ -1306,12 +1360,7 @@ pub fn prices(env: &Env, asset: Asset, records: u32) -> Option<Vec<PriceData>> {
     let start = current_ledger.saturating_sub(max_to_check);
     let mut ledger = current_ledger;
     loop {
-        let hist_key = DataKey::PriceHistory(addr.clone(), ledger);
-        if let Some(entry) = env
-            .storage()
-            .temporary()
-            .get::<_, PriceHistoryEntry>(&hist_key)
-        {
+        if let Some(entry) = crate::history::read_history_entry(env, &addr, ledger) {
             result.push_back(PriceData {
                 price: entry.price,
                 timestamp: entry.timestamp,
@@ -1448,8 +1497,7 @@ pub fn historical_price_change_percent(
     let current_ledger = env.ledger().sequence();
     let target_ledger = current_ledger.saturating_sub(ledgers_back);
 
-    let hist_key = DataKey::PriceHistory(asset.clone(), target_ledger);
-    let historical_entry: Option<PriceHistoryEntry> = env.storage().temporary().get(&hist_key);
+    let historical_entry = crate::history::read_history_entry(env, &asset, target_ledger);
 
     let old_price = {
         let entry = historical_entry?;

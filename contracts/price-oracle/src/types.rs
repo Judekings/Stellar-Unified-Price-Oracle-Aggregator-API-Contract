@@ -476,6 +476,25 @@ pub enum DataKey {
     NotificationPrefs(u32),
     /// Every event-type discriminant that currently has at least one preference (#243).
     NotificationEventTypes,
+
+    // -------------------------------------------------------------------------
+    // #247 — History compaction
+    // -------------------------------------------------------------------------
+    /// Maximum allowed price deviation in basis points before two adjacent history
+    /// entries are considered "different" for compaction purposes (u32).
+    /// Default: 0 means compaction is disabled.
+    CfgCompactionThresholdBps,
+    /// Compaction metadata for an asset: how many entries were original vs compacted.
+    CompactionMeta(Address),
+
+    // -------------------------------------------------------------------------
+    // #251 — History sharding (weekly time buckets)
+    // -------------------------------------------------------------------------
+    /// One shard of price history entries for an asset in a given week bucket
+    /// (u32 = week index = ledger / LEDGERS_PER_WEEK). Stores `Vec<PriceHistoryEntry>`.
+    HistoryBucket(Address, u32),
+    /// Ordered list of week-bucket indices that have data for an asset.
+    HistoryBucketIndex(Address),
 }
 
 
@@ -529,6 +548,23 @@ pub struct AggregatePrice {
     /// Decimal precision applied to `price`.
     pub decimals: u32,
     pub is_override: bool,
+    /// Monotonically-incrementing version counter. Starts at 0 and increments by 1
+    /// each time the aggregate price changes. Allows consumers to detect price
+    /// changes without comparing i128 values. Persists across contract upgrades.
+    pub version: u32,
+}
+
+/// Result type for `get_aggregate_with_version`: the aggregate price plus its version number.
+///
+/// Returned by [`get_aggregate_with_version`] so callers can poll for changes using only
+/// the lightweight `version` field rather than comparing full `i128` prices.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct VersionedAggregatePrice {
+    /// The full aggregate price record.
+    pub aggregate: AggregatePrice,
+    /// The current version counter — mirrors `aggregate.version` for ergonomic access.
+    pub version: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1625,4 +1661,67 @@ pub struct BatchItem {
     pub price: u128,
     /// Unix timestamp of the price observation.
     pub timestamp: u64,
+}
+
+// =============================================================================
+// #247 — History Compaction
+// =============================================================================
+
+/// Metadata recorded after compaction runs for an asset.
+///
+/// Stored under [`DataKey::CompactionMeta`] keyed by asset address and updated
+/// each time `compact_history` runs (admin) or on-write compaction occurs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct CompactionMetadata {
+    /// Total entries that existed before the most-recent compaction pass.
+    pub original_count: u32,
+    /// Number of entries retained after compaction (distinct price snapshots).
+    pub compacted_count: u32,
+    /// Ledger at which the most-recent compaction was executed.
+    pub last_compaction_ledger: u32,
+    /// Threshold in basis points used for the most-recent compaction.
+    pub threshold_bps: u32,
+}
+
+// =============================================================================
+// #253 — Storage Budget Calculator
+// =============================================================================
+
+/// Estimated storage cost and usage breakdown for a single asset.
+///
+/// Returned by `get_storage_budget(asset)`. All cost figures are rough estimates
+/// based on known Soroban ledger-entry fees; they are advisory, not guaranteed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct StorageBudget {
+    /// Asset address this budget refers to.
+    pub asset: Address,
+    /// Current number of price history entries stored for this asset.
+    pub entry_count: u32,
+    /// Estimated TTL cost in stroops to keep all current entries alive for one month
+    /// (30 × 17,280 ledgers ≈ 518,400 ledgers at ~5 s/ledger).
+    pub estimated_ttl_costs: i128,
+    /// Projected monthly storage cost in stroops, factoring in write and rent fees.
+    pub projected_monthly_cost: i128,
+    /// Estimated bytes consumed by this asset's history entries.
+    pub estimated_bytes: u32,
+}
+
+/// Aggregate storage budget across all registered assets.
+///
+/// Returned by `get_total_storage_budget()`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct TotalStorageBudget {
+    /// Number of registered assets included in this report.
+    pub asset_count: u32,
+    /// Sum of `entry_count` across all assets.
+    pub total_entry_count: u32,
+    /// Sum of `estimated_ttl_costs` across all assets (stroops/month).
+    pub total_estimated_ttl_costs: i128,
+    /// Sum of `projected_monthly_cost` across all assets (stroops/month).
+    pub total_projected_monthly_cost: i128,
+    /// Sum of `estimated_bytes` across all assets.
+    pub total_estimated_bytes: u32,
 }
