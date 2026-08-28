@@ -4640,3 +4640,6 @@ mod correlation_feature_tests;
 
 #[cfg(test)]
 mod did_bridge_metadata_tests;
+
+#[cfg(test)]
+mod issue_307_alert_rules_tests;
