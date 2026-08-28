@@ -778,3 +778,32 @@ pub fn set_subscription_price(env: &Env, duration: u32, amount: i128) {
     plans.set(duration, amount);
     write_subscription_plans(env, &plans);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #247 — History Compaction threshold config
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Sets the history compaction threshold in basis points.
+///
+/// When `threshold_bps > 0`, adjacent history entries whose price difference is
+/// within `threshold_bps / 100 %` of each other are eligible for merging.
+/// A value of `0` disables compaction entirely (default).
+///
+/// # Errors
+/// * [`ErrorCode::NotAuthorized`] — caller is not the admin.
+pub fn set_compaction_threshold_bps(env: &Env, threshold_bps: u32) {
+    let admin = get_admin(env);
+    admin.require_auth();
+    crate::history::set_compaction_threshold_bps(env, threshold_bps);
+    emit_admin_action(
+        env,
+        symbol_short!("set_comp"),
+        admin,
+        Bytes::new(env),
+    );
+}
+
+/// Returns the current history compaction threshold in basis points (0 = disabled).
+pub fn get_compaction_threshold_bps(env: &Env) -> u32 {
+    crate::history::get_compaction_threshold_bps(env)
+}

@@ -614,6 +614,23 @@ pub struct AggregatePrice {
     /// Decimal precision applied to `price`.
     pub decimals: u32,
     pub is_override: bool,
+    /// Monotonically-incrementing version counter. Starts at 0 and increments by 1
+    /// each time the aggregate price changes. Allows consumers to detect price
+    /// changes without comparing i128 values. Persists across contract upgrades.
+    pub version: u32,
+}
+
+/// Result type for `get_aggregate_with_version`: the aggregate price plus its version number.
+///
+/// Returned by [`get_aggregate_with_version`] so callers can poll for changes using only
+/// the lightweight `version` field rather than comparing full `i128` prices.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct VersionedAggregatePrice {
+    /// The full aggregate price record.
+    pub aggregate: AggregatePrice,
+    /// The current version counter — mirrors `aggregate.version` for ergonomic access.
+    pub version: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

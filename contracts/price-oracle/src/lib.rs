@@ -2279,6 +2279,156 @@ impl PriceOracleContract {
         admin::get_interpolation_enabled(&env)
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // #252 — Versioned Aggregate Price
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Returns the current aggregated price together with its version counter (#252).
+    ///
+    /// The `version` is a monotonically-incrementing `u32` that starts at `0` after
+    /// the first aggregation and increments by `1` each time the aggregate price
+    /// changes. Consumers can poll `version` instead of comparing full `i128` values
+    /// to detect price changes efficiently.
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - The Soroban execution environment.
+    /// * `asset` - Asset address to query.
+    ///
+    /// # Returns
+    ///
+    /// [`VersionedAggregatePrice`] containing the full aggregate and the version.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — asset is not registered.
+    /// * [`ErrorCode::NoData`] — no aggregate price exists yet for the asset.
+    pub fn get_aggregate_with_version(env: Env, asset: Address) -> VersionedAggregatePrice {
+        enter_reentrancy_guard(&env);
+        let result = prices::get_aggregate_with_version(&env, asset);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // #247 — History Compaction
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Sets the history compaction threshold in basis points (admin only) (#247).
+    ///
+    /// Adjacent history entries whose price difference is within
+    /// `threshold_bps / 100 %` of each other are eligible for merging during
+    /// `compact_history` or on the on-write path. A value of `0` disables
+    /// compaction entirely (default).
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the admin.
+    pub fn set_compaction_threshold_bps(env: Env, threshold_bps: u32) {
+        enter_reentrancy_guard(&env);
+        admin::set_compaction_threshold_bps(&env, threshold_bps);
+        exit_reentrancy_guard(&env);
+    }
+
+    /// Returns the current history compaction threshold in basis points (0 = disabled).
+    pub fn get_compaction_threshold_bps(env: Env) -> u32 {
+        admin::get_compaction_threshold_bps(&env)
+    }
+
+    /// Runs on-demand history compaction for the given asset (admin only) (#247).
+    ///
+    /// Iterates the full history index and removes entries whose price deviates
+    /// less than the configured compaction threshold from their preceding retained
+    /// neighbour. The first and last entries are always retained to preserve range
+    /// bounds. Returns [`CompactionMetadata`] with before/after entry counts.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the admin.
+    /// * [`ErrorCode::AssetNotRegistered`] — asset is not registered.
+    pub fn compact_history(env: Env, asset: Address) -> CompactionMetadata {
+        enter_reentrancy_guard(&env);
+        let admin = crate::storage::get_admin(&env);
+        admin.require_auth();
+        let result = history::compact_history(&env, asset);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
+    /// Returns the most recent compaction metadata for an asset, if any.
+    pub fn get_compaction_metadata(env: Env, asset: Address) -> Option<CompactionMetadata> {
+        history::get_compaction_metadata(&env, asset)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // #251 — History Sharding
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Migrates existing per-ledger history entries for `asset` into sharded
+    /// weekly buckets (admin only) (#251).
+    ///
+    /// This is a non-destructive, idempotent operation: legacy reads continue
+    /// to work after migration. Returns the number of entries migrated.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the admin.
+    /// * [`ErrorCode::AssetNotRegistered`] — asset is not registered.
+    pub fn migrate_history_to_shards(env: Env, asset: Address) -> u32 {
+        enter_reentrancy_guard(&env);
+        let admin = crate::storage::get_admin(&env);
+        admin.require_auth();
+        let result = history::migrate_history_to_shards(&env, asset);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
+    /// Returns all history entries from the weekly shard bucket that contains `ledger`.
+    ///
+    /// Transparent to consumers — no knowledge of the sharding scheme is needed.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — asset is not registered.
+    pub fn get_bucket_entries(
+        env: Env,
+        asset: Address,
+        ledger: u32,
+    ) -> Vec<PriceHistoryEntry> {
+        history::get_bucket_entries(&env, asset, ledger)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // #253 — Storage Budget Calculator
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Estimates current and projected storage costs for a single asset (#253).
+    ///
+    /// Returns a [`StorageBudget`] with entry counts, estimated TTL costs, and a
+    /// monthly cost projection. All figures are advisory estimates based on
+    /// approximate Soroban fee constants.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AssetNotRegistered`] — asset is not registered.
+    pub fn get_storage_budget(env: Env, asset: Address) -> StorageBudget {
+        enter_reentrancy_guard(&env);
+        let result = history::get_storage_budget(&env, asset);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
+    /// Aggregates storage budgets across all registered assets (#253).
+    ///
+    /// Returns a [`TotalStorageBudget`] summing entry counts and cost projections
+    /// for every registered asset. Potentially expensive for large asset sets.
+    pub fn get_total_storage_budget(env: Env) -> TotalStorageBudget {
+        enter_reentrancy_guard(&env);
+        let result = history::get_total_storage_budget(&env);
+        exit_reentrancy_guard(&env);
+        result
+    }
+
     // --- SEP-40 Oracle Interface ---
 
     /// Returns the decimal precision used by this oracle (SEP-40 `decimals`).
