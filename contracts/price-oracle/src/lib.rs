@@ -4646,3 +4646,6 @@ mod issue_307_alert_rules_tests;
 
 #[cfg(test)]
 mod issue_308_health_monitoring_tests;
+
+#[cfg(test)]
+mod issue_309_rate_limiting_tests;
