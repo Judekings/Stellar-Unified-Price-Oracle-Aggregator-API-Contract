@@ -141,6 +141,9 @@ mod dex_tests;
 #[cfg(test)]
 mod amm_integration_tests;
 
+#[cfg(test)]
+mod l2_sequencer_oracle_tests;
+
 pub use types::{
     AggregatePrice,
     AggregationMethod,
