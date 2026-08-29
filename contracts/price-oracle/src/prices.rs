@@ -1290,7 +1290,10 @@ pub fn get_aggregate_with_version(
     crate::types::VersionedAggregatePrice { aggregate, version }
 }
 
-
+pub fn get_price_with_confidence(
+    env: &Env,
+    asset: Address,
+) -> Option<(AggregatePrice, u32)> {
     let aggregate = get_price(env, asset.clone(), 0)?;
 
     let mut prices: Vec<i128> = Vec::new(env);
