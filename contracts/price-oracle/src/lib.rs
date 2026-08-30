@@ -153,6 +153,18 @@ mod early_submission_discount_tests;
 #[cfg(test)]
 mod upgrade_simulation_tests;
 
+#[cfg(test)]
+mod cross_chain_security_tests;
+
+#[cfg(test)]
+mod dos_protection_tests;
+
+#[cfg(test)]
+mod storage_migration_tests;
+
+#[cfg(test)]
+mod ci_security_tests;
+
 pub use types::{
     AggregatePrice,
     AggregationMethod,
