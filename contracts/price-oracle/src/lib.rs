@@ -159,6 +159,9 @@ mod sdk_v27_compatibility_tests;
 #[cfg(test)]
 mod cross_contract_governance_tests;
 
+#[cfg(test)]
+mod delta_encoding_storage_tests;
+
 pub use types::{
     AggregatePrice,
     AggregationMethod,
