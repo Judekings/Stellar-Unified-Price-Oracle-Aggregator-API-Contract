@@ -126,6 +126,12 @@ mod timelock_queue_viewer_tests;
 #[cfg(test)]
 mod proposal_simulation_tests;
 
+// =============================================================================
+// #373 — Treasury Management Tests
+// =============================================================================
+#[cfg(test)]
+mod treasury_management_tests;
+
 #[cfg(test)]
 mod twap_tests;
 
