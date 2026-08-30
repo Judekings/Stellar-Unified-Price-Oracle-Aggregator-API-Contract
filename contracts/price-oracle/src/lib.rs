@@ -114,6 +114,12 @@ mod prop_tests;
 #[cfg(test)]
 mod governance_analytics_tests;
 
+// =============================================================================
+// #372 — Timelock Queue Viewer Tests
+// =============================================================================
+#[cfg(test)]
+mod timelock_queue_viewer_tests;
+
 #[cfg(test)]
 mod twap_tests;
 
