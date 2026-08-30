@@ -156,6 +156,9 @@ mod upgrade_simulation_tests;
 #[cfg(test)]
 mod sdk_v27_compatibility_tests;
 
+#[cfg(test)]
+mod cross_contract_governance_tests;
+
 pub use types::{
     AggregatePrice,
     AggregationMethod,
