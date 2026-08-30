@@ -120,6 +120,12 @@ mod governance_analytics_tests;
 #[cfg(test)]
 mod timelock_queue_viewer_tests;
 
+// =============================================================================
+// #371 — Proposal Simulation Tests
+// =============================================================================
+#[cfg(test)]
+mod proposal_simulation_tests;
+
 #[cfg(test)]
 mod twap_tests;
 
