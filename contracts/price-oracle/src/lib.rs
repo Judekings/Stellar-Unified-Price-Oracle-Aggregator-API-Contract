@@ -108,6 +108,12 @@ mod override_tests;
 #[cfg(test)]
 mod prop_tests;
 
+// =============================================================================
+// #370 — Governance Analytics Dashboard Tests
+// =============================================================================
+#[cfg(test)]
+mod governance_analytics_tests;
+
 #[cfg(test)]
 mod twap_tests;
 
