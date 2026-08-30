@@ -162,6 +162,9 @@ mod cross_contract_governance_tests;
 #[cfg(test)]
 mod delta_encoding_storage_tests;
 
+#[cfg(test)]
+mod wasm_binary_size_tests;
+
 pub use types::{
     AggregatePrice,
     AggregationMethod,
