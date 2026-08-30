@@ -188,7 +188,7 @@ pub use types::{
     PriceOverrideEntry,
     RelayerInfo,
     // Batch dry-run simulation
-    SimulationWarning, OperationSimulationResult, BatchSimulationResult,
+    SimulationWarning,
     // State introspection
     StateDump, StateAnalysis, StateDiff, StateDiffEntry,
     // DEX / AMM integration
@@ -3436,7 +3436,7 @@ impl PriceOracleContract {
     /// # Errors
     ///
     /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
-    pub fn set_cross_chain_verification_enabled(env: Env, enabled: bool) {
+    pub fn set_cross_verify_enabled(env: Env, enabled: bool) {
         cross_chain_verify::set_cross_chain_verification_enabled(&env, enabled);
     }
 
@@ -3449,7 +3449,7 @@ impl PriceOracleContract {
     /// # Returns
     ///
     /// `true` if verification is enabled, `false` otherwise.
-    pub fn is_cross_chain_verification_enabled(env: Env) -> bool {
+    pub fn is_cross_verify_enabled(env: Env) -> bool {
         cross_chain_verify::is_cross_chain_verification_enabled(&env)
     }
 
