@@ -153,6 +153,9 @@ mod early_submission_discount_tests;
 #[cfg(test)]
 mod upgrade_simulation_tests;
 
+#[cfg(test)]
+mod sdk_v27_compatibility_tests;
+
 pub use types::{
     AggregatePrice,
     AggregationMethod,
