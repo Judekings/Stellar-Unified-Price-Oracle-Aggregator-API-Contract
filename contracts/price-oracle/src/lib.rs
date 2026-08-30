@@ -4814,3 +4814,15 @@ mod issue_309_rate_limiting_tests;
 
 #[cfg(test)]
 mod issue_310_fee_market_tests;
+
+#[cfg(test)]
+mod issue_350_governance_audit_tests;
+
+#[cfg(test)]
+mod issue_351_aggregation_verification_tests;
+
+#[cfg(test)]
+mod issue_352_multisig_operations_tests;
+
+#[cfg(test)]
+mod issue_353_incident_response_tests;
