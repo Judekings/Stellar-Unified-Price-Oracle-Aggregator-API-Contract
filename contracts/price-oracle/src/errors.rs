@@ -23,6 +23,7 @@ use soroban_sdk::contracterror;
 /// | 103–107 | Relayer batch/bond/fee market (#264,#265,#266) |
 /// | 116–118 | Cross-chain asset registry |
 /// | 119–121 | Axelar GMP integration |
+/// | 122–125 | LayerZero integration |
 #[contracterror]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ErrorCode {
@@ -260,4 +261,14 @@ pub enum ErrorCode {
     AxelarCommandAlreadyExecuted = 120,
     /// No trusted bridge source is registered for this (source_chain, source_address).
     AxelarSourceNotTrusted = 121,
+
+    // ── 122–125: LayerZero integration ─────────────────────────────────────────
+    /// The LayerZero Endpoint contract address has not been configured.
+    LzEndpointNotConfigured = 122,
+    /// The delivered nonce does not match the expected next nonce for this pathway.
+    LzNonceOutOfOrder = 123,
+    /// No trusted bridge source is registered for this (src_eid, sender) pathway.
+    LzRemoteNotTrusted = 124,
+    /// No canonical registry chain name is configured for this LayerZero src_eid.
+    LzChainNameNotConfigured = 125,
 }

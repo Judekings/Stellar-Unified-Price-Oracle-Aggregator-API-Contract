@@ -1839,3 +1839,40 @@ pub struct AxelarMessageExecutedEvent {
     pub source_address: String,
     pub price: i128,
 }
+
+// =============================================================================
+// LayerZero Integration Events
+// =============================================================================
+
+/// Emitted when the trusted LayerZero Endpoint address is (re)configured.
+#[contractevent]
+#[derive(Clone)]
+pub struct LzEndpointSetEvent {
+    #[topic]
+    pub endpoint: Address,
+}
+
+/// Emitted when a trusted LayerZero remote pathway is registered.
+#[contractevent]
+#[derive(Clone)]
+pub struct LzTrustedRemoteSetEvent {
+    #[topic]
+    pub bridge_source: Address,
+    pub src_eid: u32,
+    pub sender: BytesN<32>,
+}
+
+/// Emitted when a price is applied from a verified LayerZero message.
+#[contractevent]
+#[derive(Clone)]
+pub struct LzMessageReceivedEvent {
+    #[topic]
+    pub asset: Address,
+    #[topic]
+    pub bridge_source: Address,
+    pub src_eid: u32,
+    pub sender: BytesN<32>,
+    pub nonce: u64,
+    pub guid: BytesN<32>,
+    pub price: i128,
+}

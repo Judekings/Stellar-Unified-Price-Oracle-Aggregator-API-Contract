@@ -106,6 +106,11 @@ mod asset_registry;
 // =============================================================================
 mod axelar_gmp;
 
+// =============================================================================
+// LayerZero Integration
+// =============================================================================
+mod layerzero;
+
 // Shared wire format / submission plumbing used by the bridge integrations above.
 mod bridge_common;
 
@@ -4965,6 +4970,68 @@ impl PriceOracleContract {
             source_address,
             payload,
         );
+    }
+
+    // --- LayerZero integration ---
+
+    /// Configures the trusted LayerZero Endpoint contract address. Admin-only.
+    pub fn set_layerzero_endpoint(env: Env, endpoint: Address) {
+        layerzero::set_layerzero_endpoint(&env, endpoint);
+    }
+
+    /// Returns the currently configured LayerZero Endpoint address, if any.
+    pub fn get_layerzero_endpoint(env: Env) -> Option<Address> {
+        layerzero::get_layerzero_endpoint(&env)
+    }
+
+    /// Maps a LayerZero source endpoint id onto a canonical registry chain name
+    /// (e.g. `30101 -> "ethereum"`). Admin-only.
+    pub fn set_lz_chain_name(env: Env, src_eid: u32, chain: String) {
+        layerzero::set_lz_chain_name(&env, src_eid, chain);
+    }
+
+    /// Registers `bridge_source` (an already-registered oracle source) as the
+    /// attribution target for messages from the `(src_eid, sender)` pathway.
+    /// Admin-only.
+    pub fn set_lz_trusted_remote(env: Env, src_eid: u32, sender: BytesN<32>, bridge_source: Address) {
+        layerzero::set_trusted_remote(&env, src_eid, sender, bridge_source);
+    }
+
+    /// Revokes a trusted LayerZero remote pathway. Admin-only.
+    pub fn remove_lz_trusted_remote(env: Env, src_eid: u32, sender: BytesN<32>) {
+        layerzero::remove_trusted_remote(&env, src_eid, sender);
+    }
+
+    /// Returns the last accepted inbound nonce for a `(src_eid, sender)` pathway (`0` if none).
+    pub fn get_lz_inbound_nonce(env: Env, src_eid: u32, sender: BytesN<32>) -> u64 {
+        layerzero::get_inbound_nonce(&env, src_eid, sender)
+    }
+
+    /// Delivers a price update via a LayerZero `lzReceive`-style call. `endpoint`
+    /// must match the configured trusted Endpoint address and authorize this
+    /// call. Nonce ordering is strictly enforced per `(src_eid, sender)` pathway.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::LzEndpointNotConfigured`] — no Endpoint has been configured.
+    /// * [`ErrorCode::NotAuthorized`] — `endpoint` does not match the configured Endpoint.
+    /// * [`ErrorCode::LzNonceOutOfOrder`] — `nonce` is not exactly one greater than
+    ///   the last accepted nonce for this pathway.
+    /// * [`ErrorCode::LzRemoteNotTrusted`] — no bridge source is registered for
+    ///   `(src_eid, sender)`.
+    /// * [`ErrorCode::LzChainNameNotConfigured`] — `src_eid` has no registry chain name.
+    /// * [`ErrorCode::ForeignAssetNotMapped`] — the payload's foreign asset id has no
+    ///   registry mapping on that chain.
+    pub fn lz_receive(
+        env: Env,
+        endpoint: Address,
+        src_eid: u32,
+        sender: BytesN<32>,
+        nonce: u64,
+        guid: BytesN<32>,
+        message: Bytes,
+    ) {
+        layerzero::lz_receive(&env, endpoint, src_eid, sender, nonce, guid, message);
     }
 }
 

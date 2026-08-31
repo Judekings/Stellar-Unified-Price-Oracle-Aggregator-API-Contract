@@ -582,6 +582,18 @@ pub enum DataKey {
     AxelarExecutedCommand(BytesN<32>),
     /// Maps a trusted (source_chain, source_address) GMP sender to a registered bridge source.
     AxelarTrustedSource(String, String),
+
+    // -------------------------------------------------------------------------
+    // LayerZero integration
+    // -------------------------------------------------------------------------
+    /// Trusted LayerZero Endpoint contract address permitted to invoke `lz_receive`.
+    LzEndpoint,
+    /// Last accepted inbound nonce for a (source endpoint id, sender) pathway.
+    LzInboundNonce(u32, BytesN<32>),
+    /// Maps a trusted (src_eid, sender) LayerZero pathway to a registered bridge source.
+    LzTrustedRemote(u32, BytesN<32>),
+    /// Canonical registry chain name for a LayerZero source endpoint id.
+    LzEidChainName(u32),
 }
 
 /// A price submission from a single oracle source for a specific asset.
