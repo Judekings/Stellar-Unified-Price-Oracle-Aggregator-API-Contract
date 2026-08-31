@@ -562,6 +562,16 @@ pub enum DataKey {
     // -------------------------------------------------------------------------
     /// Stellar ecosystem metadata registry entry.
     EcosystemMetadata,
+
+    // -------------------------------------------------------------------------
+    // Canonical cross-chain asset registry
+    // -------------------------------------------------------------------------
+    /// Canonical [`ForeignAssetMapping`] keyed by (chain identifier, foreign asset id).
+    ForeignAssetMapping(String, BytesN<32>),
+    /// Ordered list of (chain, foreign_address) keys registered for a Stellar asset.
+    AssetForeignMappings(Address),
+    /// Global ordered list of all (chain, foreign_address) keys, for enumeration.
+    ForeignAssetRegistryList,
 }
 
 /// A price submission from a single oracle source for a specific asset.
@@ -2182,6 +2192,32 @@ pub struct SoroswapPool {
     pub reserve_a: i128,
     pub reserve_b: i128,
     pub fee_bps: u32,
+    pub enabled: bool,
+}
+
+// =============================================================================
+// Canonical Cross-Chain Asset Registry
+// =============================================================================
+
+/// Canonical mapping from a Stellar asset to its representation on a foreign chain.
+///
+/// Keyed by `(chain, foreign_address)` — see [`crate::asset_registry`]. All
+/// cross-chain integrations (Axelar GMP, LayerZero, manual cross-reference
+/// checks) resolve foreign asset identifiers through this single registry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ForeignAssetMapping {
+    /// The Stellar asset address this mapping resolves to.
+    pub stellar_asset: Address,
+    /// Canonical chain identifier (e.g. `"ethereum"`, `"polygon"`).
+    pub chain: String,
+    /// 32-byte canonical representation of the asset's address on `chain`
+    /// (shorter addresses, e.g. 20-byte EVM addresses, are left-padded).
+    pub foreign_address: BytesN<32>,
+    /// Decimal precision of the price/amount as denominated on `chain`.
+    pub decimals: u32,
+    /// Whether this mapping is currently active. Disabled mappings are kept
+    /// for history but rejected by cross-chain modules.
     pub enabled: bool,
 }
 

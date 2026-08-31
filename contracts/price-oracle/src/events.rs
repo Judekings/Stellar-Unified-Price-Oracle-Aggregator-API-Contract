@@ -1765,3 +1765,41 @@ pub struct FeedMetadataUpdatedEvent {
     pub symbol: String,
     pub updated_at: u64,
 }
+
+// =============================================================================
+// Canonical Cross-Chain Asset Registry Events
+// =============================================================================
+
+/// Emitted when a new foreign-chain asset mapping is registered.
+#[contractevent]
+#[derive(Clone)]
+pub struct ForeignAssetMappedEvent {
+    #[topic]
+    pub stellar_asset: Address,
+    pub chain: String,
+    pub foreign_address: BytesN<32>,
+    pub decimals: u32,
+}
+
+/// Emitted when an existing foreign-chain asset mapping is updated
+/// (decimals and/or enabled flag).
+#[contractevent]
+#[derive(Clone)]
+pub struct ForeignAssetMappingUpdatedEvent {
+    #[topic]
+    pub stellar_asset: Address,
+    pub chain: String,
+    pub foreign_address: BytesN<32>,
+    pub decimals: u32,
+    pub enabled: bool,
+}
+
+/// Emitted when a foreign-chain asset mapping is removed.
+#[contractevent]
+#[derive(Clone)]
+pub struct ForeignAssetMappingRemovedEvent {
+    #[topic]
+    pub stellar_asset: Address,
+    pub chain: String,
+    pub foreign_address: BytesN<32>,
+}

@@ -96,6 +96,11 @@ mod ecosystem_metadata;
 // =============================================================================
 mod event_streaming;
 
+// =============================================================================
+// Canonical Cross-Chain Asset Registry
+// =============================================================================
+mod asset_registry;
+
 #[cfg(test)]
 mod circuit_breaker_tests;
 
@@ -194,6 +199,8 @@ pub use types::{
     StateDump, StateAnalysis, StateDiff, StateDiffEntry,
     // DEX / AMM integration
     DexPrice, AmmWeightConfig, SoroswapPool,
+    // Cross-chain asset registry
+    ForeignAssetMapping,
 };
 
 use soroban_sdk::{
@@ -4770,6 +4777,62 @@ impl PriceOracleContract {
     /// Returns feed metadata for a specific asset, or `None`.
     pub fn metadata_get_feed(env: Env, asset: Address) -> Option<FeedMetadata> {
         ecosystem_metadata::get_feed_metadata(&env, asset)
+    }
+
+    // --- Canonical cross-chain asset registry ---
+
+    /// Registers a canonical mapping from `stellar_asset` to its representation
+    /// on a foreign `chain`. Admin-only. See [`crate::asset_registry`].
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the admin.
+    /// * [`ErrorCode::AssetNotRegistered`] — `stellar_asset` is not registered.
+    /// * [`ErrorCode::ForeignAssetAlreadyMapped`] — a mapping already exists.
+    pub fn register_foreign_asset_mapping(
+        env: Env,
+        stellar_asset: Address,
+        chain: String,
+        foreign_address: BytesN<32>,
+        decimals: u32,
+    ) {
+        asset_registry::register_foreign_asset_mapping(
+            &env,
+            stellar_asset,
+            chain,
+            foreign_address,
+            decimals,
+        );
+    }
+
+    /// Updates an existing foreign asset mapping's decimals and enabled flag. Admin-only.
+    pub fn update_foreign_asset_mapping(
+        env: Env,
+        chain: String,
+        foreign_address: BytesN<32>,
+        decimals: u32,
+        enabled: bool,
+    ) {
+        asset_registry::update_foreign_asset_mapping(&env, chain, foreign_address, decimals, enabled);
+    }
+
+    /// Removes a foreign asset mapping. Admin-only.
+    pub fn remove_foreign_asset_mapping(env: Env, chain: String, foreign_address: BytesN<32>) {
+        asset_registry::remove_foreign_asset_mapping(&env, chain, foreign_address);
+    }
+
+    /// Returns the mapping for `(chain, foreign_address)`, if any.
+    pub fn get_foreign_asset_mapping(
+        env: Env,
+        chain: String,
+        foreign_address: BytesN<32>,
+    ) -> Option<ForeignAssetMapping> {
+        asset_registry::get_foreign_asset_mapping(&env, chain, foreign_address)
+    }
+
+    /// Returns every foreign-chain mapping registered for `asset`.
+    pub fn get_foreign_mappings_for_asset(env: Env, asset: Address) -> Vec<ForeignAssetMapping> {
+        asset_registry::get_foreign_mappings_for_asset(&env, asset)
     }
 }
 
