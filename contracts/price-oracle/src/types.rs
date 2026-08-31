@@ -137,6 +137,7 @@ pub enum DataKey {
     SubscriptionExpiry(Address),
     /// Available subscription plans mapped by duration (seconds) to amount (stroops).
     SubscriptionPlans,
+    SubscriptionPayment,
     PriceOverride(Address),
     /// Per-asset resolution override in seconds. When set, overrides the contract-wide resolution.
     AssetResolution(Address),
@@ -236,6 +237,10 @@ pub enum DataKey {
     CfgBftFaultTolerance,
     /// Aggregation method used by the BFT path.
     CfgBftAggregationMethod,
+    /// Global flag to enable standalone commit-reveal mode independent of BFT.
+    CommitRevealEnabled,
+    /// Amount to slash from sources who commit but do not reveal in a round.
+    CommitRevealSlashAmount,
 
     // -------------------------------------------------------------------------
     // #188: Economic finality gadget
@@ -683,6 +688,20 @@ pub struct SubscriptionExpiry {
     pub expiry_timestamp: u64,
 }
 
+/// Native token payment record for a subscription (#294).
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct SubscriptionPayment {
+    /// Consumer address.
+    pub consumer: Address,
+    /// Payment amount in stroops.
+    pub amount: i128,
+    /// Unix timestamp when the payment was recorded.
+    pub timestamp: u64,
+    /// Payment status: 0 = pending, 1 = completed, 2 = refunded.
+    pub status: u8,
+}
+
 /// A snapshot of the aggregate price recorded at a particular ledger.
 ///
 /// Stored in temporary storage under [`DataKey::PriceHistory`] keyed by `(asset, ledger)`.
@@ -863,6 +882,16 @@ pub struct OptimisticProposal {
     pub resolved: bool,
     pub resolution: u32,
     pub disputer: Option<Address>,
+}
+
+/// Off-chain external data proof used for optimistic dispute resolution (#291).
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ExternalDataProof {
+    pub source: Address,
+    pub data_hash: BytesN<32>,
+    pub timestamp: u64,
+    pub signature: BytesN<64>,
 }
 
 /// SEP-40 compatible price data returned by the standard oracle interface methods.
@@ -2185,3 +2214,26 @@ pub struct SoroswapPool {
     pub enabled: bool,
 }
 
+// =============================================================================
+// #293 — Contract Metadata & ERC-165-style Interface Discovery
+// =============================================================================
+
+pub const INTERFACE_ID_SEP40: &[u8; 4] = &[0xa1, 0x23, 0x4b, 0x56];
+pub const INTERFACE_ID_ADMIN: &[u8; 4] = &[0x12, 0x34, 0x56, 0x78];
+pub const INTERFACE_ID_SOURCE_MGMT: &[u8; 4] = &[0x87, 0x65, 0x43, 0x21];
+pub const INTERFACE_ID_SUBSCRIPTION: &[u8; 4] = &[0x11, 0x22, 0x33, 0x44];
+pub const INTERFACE_ID_OPTIMISTIC: &[u8; 4] = &[0x55, 0x66, 0x77, 0x88];
+pub const INTERFACE_ID_COMMIT_REVEAL: &[u8; 4] = &[0x99, 0xaa, 0xbb, 0xcc];
+pub const INTERFACE_ID_NATIVE_FEES: &[u8; 4] = &[0xdd, 0xee, 0xff, 0x00];
+pub const INTERFACE_ID_METADATA: &[u8; 4] = &[0x01, 0x02, 0x03, 0x04];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ContractMetadata {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub admin: Address,
+    pub decimals: u32,
+    pub supported_interfaces: Vec<BytesN<4>>,
+}

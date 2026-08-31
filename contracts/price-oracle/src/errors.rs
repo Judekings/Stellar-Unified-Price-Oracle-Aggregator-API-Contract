@@ -242,4 +242,18 @@ pub enum ErrorCode {
     TooManyCallbacks = 114,
     /// No callback registration found for the given (consumer, asset) pair (#297).
     CallbackNotFound = 115,
+
+    // ── 116: Optimistic external-data proof (#291) ────────────────────────────
+    /// The submitted external proof failed validation (#291).
+    InvalidExternalProof = 116,
+
+    // ── 117–118: Commit-reveal standalone mode (#292) ─────────────────────────
+    /// Commit-reveal mode is not enabled and BFT fault tolerance is not active.
+    CommitRevealNotEnabled = 117,
+    /// Slashing operation failed.
+    SlashFailed = 118,
+
+    // ── 119: Subscription payments (#294) ─────────────────────────────────────
+    /// A native token transfer for a subscription payment failed.
+    PaymentFailed = 119,
 }
