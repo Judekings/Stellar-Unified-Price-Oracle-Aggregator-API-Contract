@@ -1803,3 +1803,39 @@ pub struct ForeignAssetMappingRemovedEvent {
     pub chain: String,
     pub foreign_address: BytesN<32>,
 }
+
+// =============================================================================
+// Axelar GMP Integration Events
+// =============================================================================
+
+/// Emitted when the trusted Axelar Gateway address is (re)configured.
+#[contractevent]
+#[derive(Clone)]
+pub struct AxelarGatewaySetEvent {
+    #[topic]
+    pub gateway: Address,
+}
+
+/// Emitted when a trusted Axelar GMP source is registered.
+#[contractevent]
+#[derive(Clone)]
+pub struct AxelarTrustedSourceSetEvent {
+    #[topic]
+    pub bridge_source: Address,
+    pub source_chain: String,
+    pub source_address: String,
+}
+
+/// Emitted when a price is applied from a verified Axelar GMP message.
+#[contractevent]
+#[derive(Clone)]
+pub struct AxelarMessageExecutedEvent {
+    #[topic]
+    pub asset: Address,
+    #[topic]
+    pub bridge_source: Address,
+    pub command_id: BytesN<32>,
+    pub source_chain: String,
+    pub source_address: String,
+    pub price: i128,
+}

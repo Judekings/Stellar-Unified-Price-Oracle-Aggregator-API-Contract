@@ -572,6 +572,16 @@ pub enum DataKey {
     AssetForeignMappings(Address),
     /// Global ordered list of all (chain, foreign_address) keys, for enumeration.
     ForeignAssetRegistryList,
+
+    // -------------------------------------------------------------------------
+    // Axelar GMP integration
+    // -------------------------------------------------------------------------
+    /// Trusted Axelar Gateway contract address permitted to invoke `execute_axelar_message`.
+    AxelarGateway,
+    /// Replay-protection flag for a processed Axelar `command_id`.
+    AxelarExecutedCommand(BytesN<32>),
+    /// Maps a trusted (source_chain, source_address) GMP sender to a registered bridge source.
+    AxelarTrustedSource(String, String),
 }
 
 /// A price submission from a single oracle source for a specific asset.
@@ -2219,5 +2229,32 @@ pub struct ForeignAssetMapping {
     /// Whether this mapping is currently active. Disabled mappings are kept
     /// for history but rejected by cross-chain modules.
     pub enabled: bool,
+}
+
+// =============================================================================
+// Cross-Chain Bridge Message Format (Axelar GMP / LayerZero)
+// =============================================================================
+
+/// Canonical cross-chain price update payload shared by every bridge
+/// integration (Axelar GMP, LayerZero, ...), so a single wire format is
+/// used regardless of which transport carried the message.
+///
+/// Encoded on the wire (see [`crate::bridge_common`]) as the 68-byte
+/// concatenation `foreign_asset(32) || price_le(16) || decimals_le(4) ||
+/// timestamp_le(8) || nonce_le(8)`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct CrossChainPricePayload {
+    /// Foreign-chain asset identifier, resolved via the asset registry.
+    pub foreign_asset: BytesN<32>,
+    /// Raw price value scaled by `10^decimals`.
+    pub price: i128,
+    /// Decimal precision of `price` as observed on the source chain.
+    pub decimals: u32,
+    /// Unix timestamp (seconds) of the price observation on the source chain.
+    pub timestamp: u64,
+    /// Sender-assigned nonce, carried for auditability (ordering itself is
+    /// enforced by the transport, e.g. LayerZero's per-pathway nonce).
+    pub nonce: u64,
 }
 

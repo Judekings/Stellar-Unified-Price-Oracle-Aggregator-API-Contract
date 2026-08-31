@@ -22,6 +22,7 @@ use soroban_sdk::contracterror;
 /// | 99–102 | Freeze/pagination/notify (#223,#229,#243) |
 /// | 103–107 | Relayer batch/bond/fee market (#264,#265,#266) |
 /// | 116–118 | Cross-chain asset registry |
+/// | 119–121 | Axelar GMP integration |
 #[contracterror]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ErrorCode {
@@ -251,4 +252,12 @@ pub enum ErrorCode {
     ForeignAssetNotMapped = 117,
     /// The foreign asset mapping exists but has been disabled by the admin.
     ForeignAssetMappingDisabled = 118,
+
+    // ── 119–121: Axelar GMP integration ────────────────────────────────────────
+    /// The Axelar Gateway contract address has not been configured.
+    AxelarGatewayNotConfigured = 119,
+    /// This Axelar `command_id` has already been executed (replay).
+    AxelarCommandAlreadyExecuted = 120,
+    /// No trusted bridge source is registered for this (source_chain, source_address).
+    AxelarSourceNotTrusted = 121,
 }
