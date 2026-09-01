@@ -1222,7 +1222,7 @@ pub struct FmMinPriorityFeeChangedEvent {
 /// Emitted when the fee distribution ratio is changed (#176).
 #[contractevent]
 #[derive(Clone)]
-pub struct FmFeeDistributionRatioChangedEvent {
+pub struct FmFeeRatioChangedEvent {
     pub ratio_bps: u32,
 }
 
@@ -1626,14 +1626,6 @@ pub struct OperationQueuedEvent {
     #[topic]
     pub operation_id: u64,
     pub expires_at_ledger: u32,
-}
-
-/// Emitted when a pending operation is successfully executed.
-#[contractevent]
-#[derive(Clone)]
-pub struct OperationExecutedEvent {
-    #[topic]
-    pub operation_id: u64,
 }
 
 /// Emitted when a pending operation is expired (either on-demand or via maintenance sweep).

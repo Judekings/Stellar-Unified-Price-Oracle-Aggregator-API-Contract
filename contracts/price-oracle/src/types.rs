@@ -313,12 +313,42 @@ pub enum DataKey {
     // -------------------------------------------------------------------------
     /// Metadata for an approved relayer address.
     ApprovedRelayer(Address),
+    /// Registry of currently approved relayers used for cross-relayer comparisons.
+    RelayerRegistry,
     /// Fee (in stroops) credited to a relayer per successful relayed price submission.
     RelayerFeePerSubmission,
     /// Accumulated fee balance (in stroops) owed to a relayer.
     RelayerFeeBalance(Address),
     /// Running count of successful price submissions made by a relayer.
     RelayerSubmissionCount(Address),
+    /// Ledger timestamps for a relayer's recent successful submissions.
+    RelayerSubmissionHistory(Address),
+    /// Total latency accumulated for a relayer's successful submissions (seconds).
+    RelayerLatencySum(Address),
+    /// Individual latency samples for relayer percentile calculations.
+    RelayerLatencyHistory(Address),
+    /// Ordered list of assets a relayer has ever successfully submitted for.
+    RelayerAssetList(Address),
+    /// Successful submission count for a relayer/asset pair.
+    RelayerAssetCount(Address, Address),
+    /// Latency total for a relayer/asset pair.
+    RelayerAssetLatencySum(Address, Address),
+    /// Latency sample count for a relayer/asset pair.
+    RelayerAssetLatencyCount(Address, Address),
+    /// Total reported failure incidents for a relayer.
+    RelayerFailureCount(Address),
+    /// Required performance bond amount for relayers.
+    RelayerBondAmount,
+    /// Deposited bond balance for a relayer.
+    RelayerBond(Address),
+    /// Percentage of bond slashed per incident.
+    RelayerSlashPercent,
+    /// Failure threshold at which a relayer becomes slash-eligible.
+    RelayerFailureThreshold,
+    /// Reward rate credited per submission for accurate relayers.
+    RelayerRewardRate,
+    /// Accumulated reward balance owed to a relayer.
+    RelayerRewardBalance(Address),
 
     // -------------------------------------------------------------------------
     // Cross-reference oracle checks
@@ -499,6 +529,10 @@ pub enum DataKey {
     SignedSubmitPubKey(Address),
     /// Last accepted (strictly increasing) nonce for a source's signed submissions.
     SignedSubmitNonce(Address),
+    /// Source-authorized relayer delegation for `(source, relayer)`.
+    SourceRelayerDelegation(Address, Address),
+    /// Last accepted nonce for a source's relayer delegation messages.
+    SourceRelayerDelegationNonce(Address),
 
     // -------------------------------------------------------------------------
     // #218: Configurable aggregation triggers
@@ -1289,6 +1323,20 @@ pub struct RelayerInfo {
     pub approved_at_ledger: u32,
 }
 
+/// A source-authorized relayer delegation grant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct SourceRelayerDelegation {
+    /// Source that granted permission.
+    pub source: Address,
+    /// Relayer that is allowed to submit on the source's behalf.
+    pub relayer: Address,
+    /// Monotonic nonce of the signed delegation message.
+    pub nonce: u64,
+    /// Ledger sequence at which this delegation expires and becomes invalid.
+    pub expiration_ledger: u32,
+}
+
 /// A single (source, asset, price, timestamp) leg of a batch relayed submission (#264).
 ///
 /// Each leg is independently authorized by its `source` — the relayer bundles one
@@ -1339,6 +1387,14 @@ pub struct RelayerAssetStat {
     pub asset: Address,
     /// Number of successful submissions relayed for this asset.
     pub submissions: u64,
+    /// Successful submissions for this asset (mirrors `submissions` for compatibility).
+    pub successful_submissions: u64,
+    /// Reported failure incidents recorded for this asset.
+    pub failed_submissions: u32,
+    /// Success rate in basis points for this asset: `10_000 * successful / total`.
+    pub success_rate_bps: u32,
+    /// Average latency in seconds for this asset's successful submissions.
+    pub avg_latency_seconds: u64,
 }
 
 /// Aggregated operational dashboard for a relayer (#267).
@@ -1360,6 +1416,10 @@ pub struct RelayerDashboard {
     pub submissions_per_day: u64,
     /// Average latency in seconds between observation timestamp and ledger close time.
     pub avg_latency_seconds: u64,
+    /// Recent successful submission timestamps used to reconstruct a submission history.
+    pub submission_history: Vec<u64>,
+    /// Approximate latency percentile map keyed by percentage (e.g. 50, 90, 95, 99).
+    pub latency_percentiles: Map<u32, u64>,
     /// Accumulated flat + priority fee earnings (in stroops).
     pub fee_earnings: i128,
     /// Accumulated accuracy-weighted reward earnings (in stroops).
@@ -2086,23 +2146,6 @@ pub enum OperationKind {
     SetMaxHistory,
     SetDecimals,
     SetDescription,
-}
-
-/// A pending operation waiting to be executed or expired.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[contracttype]
-pub struct PendingOperation {
-    /// Unique monotonic id (ledger sequence at creation).
-    pub id: u64,
-    pub kind: OperationKind,
-    /// JSON-style serialized args stored as a String for simplicity.
-    pub args: String,
-    /// Ledger sequence at which this operation was created.
-    pub created_at_ledger: u32,
-    /// Ledger sequence after which this operation is expired and unexecutable.
-    pub expires_at_ledger: u32,
-    /// Whether this operation has been executed already.
-    pub executed: bool,
 }
 
 // ---- Template registry types ----

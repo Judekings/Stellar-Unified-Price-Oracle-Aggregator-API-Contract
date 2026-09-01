@@ -19,6 +19,7 @@ mod audit_log;
 mod config_history;
 #[cfg_attr(feature = "fuzz", allow(dead_code))]
 pub(crate) mod core;
+mod correlation;
 mod cross_reference;
 mod deadline_rebate;
 mod dex;
@@ -36,10 +37,12 @@ mod history;
 mod migration;
 mod multisig;
 mod notifications;
+mod operations;
 mod optimistic;
 mod pause;
 mod per_asset_decimals;
 mod prices;
+mod pruning;
 mod rate_limiting;
 mod rbac;
 mod recovery;
@@ -49,6 +52,7 @@ mod relayer_bonds;
 mod relayer_dashboard;
 mod reputation;
 mod rotation;
+mod scheduling;
 mod signed_submission;
 mod simulate_batch;
 mod source_deviation;
@@ -63,14 +67,9 @@ mod triggers;
 mod ttl_batching;
 mod types;
 mod vdf_sampler;
+mod verification;
 mod whitelisting;
 mod zk_verify;
-mod audit_log;
-mod rbac;
-mod emergency_pause;
-mod freeze;
-mod notifications;
-mod config_history;
 mod batch_storage;
 mod price_proof;
 mod price_callback;
@@ -123,6 +122,12 @@ mod cross_chain_verify;
 mod circuit_breaker_tests;
 
 #[cfg(test)]
+mod timelock_tests;
+
+#[cfg(test)]
+mod config_bounds_tests;
+
+#[cfg(test)]
 mod cross_ref_tests;
 
 #[cfg(test)]
@@ -130,6 +135,30 @@ mod override_tests;
 
 #[cfg(test)]
 mod prop_tests;
+
+// =============================================================================
+// #370 — Governance Analytics Dashboard Tests
+// =============================================================================
+#[cfg(test)]
+mod governance_analytics_tests;
+
+// =============================================================================
+// #372 — Timelock Queue Viewer Tests
+// =============================================================================
+#[cfg(test)]
+mod timelock_queue_viewer_tests;
+
+// =============================================================================
+// #371 — Proposal Simulation Tests
+// =============================================================================
+#[cfg(test)]
+mod proposal_simulation_tests;
+
+// =============================================================================
+// #373 — Treasury Management Tests
+// =============================================================================
+#[cfg(test)]
+mod treasury_management_tests;
 
 #[cfg(test)]
 mod twap_tests;
@@ -176,6 +205,18 @@ mod early_submission_discount_tests;
 #[cfg(test)]
 mod upgrade_simulation_tests;
 
+#[cfg(test)]
+mod sdk_v27_compatibility_tests;
+
+#[cfg(test)]
+mod cross_contract_governance_tests;
+
+#[cfg(test)]
+mod delta_encoding_storage_tests;
+
+#[cfg(test)]
+mod wasm_binary_size_tests;
+
 pub use types::{
     AggregatePrice,
     AggregationMethod,
@@ -211,8 +252,9 @@ pub use types::{
     PriceHistoryEntry,
     PriceOverrideEntry,
     RelayerInfo,
+    SourceRelayerDelegation,
     // Batch dry-run simulation
-    SimulationWarning, OperationSimulationResult, BatchSimulationResult,
+    SimulationWarning,
     // State introspection
     StateDump, StateAnalysis, StateDiff, StateDiffEntry,
     // DEX / AMM integration
@@ -3050,6 +3092,59 @@ impl PriceOracleContract {
         relayer::get_relayer_info(&env, relayer)
     }
 
+    /// Stores a source-authorized relayer delegation that permits `relayer` to submit
+    /// on `source`'s behalf without requiring admin relayer approval.
+    ///
+    /// The delegation is authenticated by the source's registered Ed25519 signing key,
+    /// and it expires once `expiration_ledger` has passed. A higher `nonce` replaces
+    /// any earlier delegation for the same `(source, relayer)` pair.
+    pub fn delegate_relayer(
+        env: Env,
+        source: Address,
+        relayer: Address,
+        nonce: u64,
+        expiration_ledger: u32,
+        signature: BytesN<64>,
+    ) {
+        relayer::delegate_relayer(&env, source, relayer, nonce, expiration_ledger, signature);
+    }
+
+    /// Returns the currently active source delegation for `(source, relayer)`, if any.
+    pub fn get_relayer_delegation(
+        env: Env,
+        source: Address,
+        relayer: Address,
+    ) -> Option<SourceRelayerDelegation> {
+        relayer::get_relayer_delegation(&env, source, relayer)
+    }
+
+    /// Challenges a relayed price as unauthorized when the source never granted a
+    /// valid delegation to the relayer, or the delegation has expired.
+    ///
+    /// On a valid challenge, the relayer's bond is slashed and the challenger is
+    /// credited with half of the slashed amount.
+    pub fn challenge_relayed_submission(
+        env: Env,
+        challenger: Address,
+        relayer: Address,
+        source: Address,
+        asset: Address,
+        price: i128,
+        timestamp: u64,
+        proof_data: Bytes,
+    ) {
+        relayer::challenge_relayed_submission(
+            &env,
+            challenger,
+            relayer,
+            source,
+            asset,
+            price,
+            timestamp,
+            proof_data,
+        );
+    }
+
     /// Submits a price for an asset on behalf of an oracle source via an approved relayer.
     ///
     /// Both `relayer` and `source` must authorize this invocation. The source creates a
@@ -3464,7 +3559,7 @@ impl PriceOracleContract {
     /// # Errors
     ///
     /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
-    pub fn set_cross_chain_verification_enabled(env: Env, enabled: bool) {
+    pub fn set_cross_verify_enabled(env: Env, enabled: bool) {
         cross_chain_verify::set_cross_chain_verification_enabled(&env, enabled);
     }
 
@@ -3477,7 +3572,7 @@ impl PriceOracleContract {
     /// # Returns
     ///
     /// `true` if verification is enabled, `false` otherwise.
-    pub fn is_cross_chain_verification_enabled(env: Env) -> bool {
+    pub fn is_cross_verify_enabled(env: Env) -> bool {
         cross_chain_verify::is_cross_chain_verification_enabled(&env)
     }
 
@@ -5076,3 +5171,15 @@ mod issue_309_rate_limiting_tests;
 
 #[cfg(test)]
 mod issue_310_fee_market_tests;
+
+#[cfg(test)]
+mod issue_378_lazy_loading_tests;
+
+#[cfg(test)]
+mod issue_379_batch_writes_tests;
+
+#[cfg(test)]
+mod issue_380_memory_allocation_tests;
+
+#[cfg(test)]
+mod issue_381_adaptive_ttl_tests;
