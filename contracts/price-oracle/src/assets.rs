@@ -241,7 +241,7 @@ pub fn set_price_bounds(
     env.storage()
         .persistent()
         .set(&DataKey::AssetPriceBounds(asset.clone()), &bounds);
-    emit_admin_action(env, symbol_short!("set_bounds"), admin, Bytes::new(env));
+    emit_admin_action(env, symbol_short!("st_bounds"), admin, Bytes::new(env));
 }
 
 pub fn get_price_bounds(env: &Env, asset: Address) -> PriceBounds {

@@ -23,6 +23,7 @@ mod config_history;
 mod contribution_quality;
 #[cfg_attr(feature = "fuzz", allow(dead_code))]
 pub(crate) mod core;
+mod correlation;
 mod cross_reference;
 mod deadline_rebate;
 mod dex;
@@ -43,13 +44,14 @@ mod metadata;
 mod migration;
 mod multisig;
 mod notifications;
-mod notifications;
+mod operations;
 mod optimistic;
 mod pause;
 mod per_asset_decimals;
 mod price_callback;
 mod price_proof;
 mod prices;
+mod pruning;
 mod rate_limiting;
 mod rbac;
 mod rbac;
@@ -60,6 +62,7 @@ mod relayer_bonds;
 mod relayer_dashboard;
 mod reputation;
 mod rotation;
+mod scheduling;
 mod signed_submission;
 mod simulate_batch;
 mod source_deviation;
@@ -74,8 +77,13 @@ mod triggers;
 mod ttl_batching;
 mod types;
 mod vdf_sampler;
+mod verification;
 mod whitelisting;
 mod zk_verify;
+mod batch_storage;
+mod price_proof;
+mod price_callback;
+mod contribution_quality;
 
 // =============================================================================
 // #283 — Stellar DID Integration
@@ -97,8 +105,37 @@ mod ecosystem_metadata;
 // =============================================================================
 mod event_streaming;
 
+// =============================================================================
+// Canonical Cross-Chain Asset Registry
+// =============================================================================
+mod asset_registry;
+
+// =============================================================================
+// Axelar GMP Integration
+// =============================================================================
+mod axelar_gmp;
+
+// =============================================================================
+// LayerZero Integration
+// =============================================================================
+mod layerzero;
+
+// Shared wire format / submission plumbing used by the bridge integrations above.
+mod bridge_common;
+
+// #226 — Cross-chain reference-price verification. Existed on disk but was never
+// wired into the crate (same class of dropped-wiring bug called out at the top of
+// this file); wired in now because `bridge_common` extends it for Axelar/LayerZero.
+mod cross_chain_verify;
+
 #[cfg(test)]
 mod circuit_breaker_tests;
+
+#[cfg(test)]
+mod timelock_tests;
+
+#[cfg(test)]
+mod config_bounds_tests;
 
 #[cfg(test)]
 mod cross_ref_tests;
@@ -108,6 +145,30 @@ mod override_tests;
 
 #[cfg(test)]
 mod prop_tests;
+
+// =============================================================================
+// #370 — Governance Analytics Dashboard Tests
+// =============================================================================
+#[cfg(test)]
+mod governance_analytics_tests;
+
+// =============================================================================
+// #372 — Timelock Queue Viewer Tests
+// =============================================================================
+#[cfg(test)]
+mod timelock_queue_viewer_tests;
+
+// =============================================================================
+// #371 — Proposal Simulation Tests
+// =============================================================================
+#[cfg(test)]
+mod proposal_simulation_tests;
+
+// =============================================================================
+// #373 — Treasury Management Tests
+// =============================================================================
+#[cfg(test)]
+mod treasury_management_tests;
 
 #[cfg(test)]
 mod twap_tests;
@@ -154,6 +215,18 @@ mod early_submission_discount_tests;
 #[cfg(test)]
 mod upgrade_simulation_tests;
 
+#[cfg(test)]
+mod sdk_v27_compatibility_tests;
+
+#[cfg(test)]
+mod cross_contract_governance_tests;
+
+#[cfg(test)]
+mod delta_encoding_storage_tests;
+
+#[cfg(test)]
+mod wasm_binary_size_tests;
+
 pub use types::{
     AggregatePrice,
     AggregationMethod,
@@ -197,16 +270,17 @@ pub use types::{
     PriceHistoryEntry,
     PriceOverrideEntry,
     RelayerInfo,
+    SourceRelayerDelegation,
     // Batch dry-run simulation
     SimulationWarning,
-    SoroswapPool,
-    StateAnalysis,
-    StateDiff,
-    StateDiffEntry,
     // State introspection
-    StateDump,
-    // Native token subscription payment (#294)
-    SubscriptionPayment,
+    StateDump, StateAnalysis, StateDiff, StateDiffEntry,
+    // DEX / AMM integration
+    DexPrice, AmmWeightConfig, SoroswapPool,
+    // Cross-chain asset registry & bridge message format
+    ForeignAssetMapping, CrossChainPricePayload,
+    // Cross-chain reference-price verification (#226)
+    CrossChainPriceEntry,
 };
 
 use soroban_sdk::{
@@ -3132,6 +3206,59 @@ impl PriceOracleContract {
         relayer::get_relayer_info(&env, relayer)
     }
 
+    /// Stores a source-authorized relayer delegation that permits `relayer` to submit
+    /// on `source`'s behalf without requiring admin relayer approval.
+    ///
+    /// The delegation is authenticated by the source's registered Ed25519 signing key,
+    /// and it expires once `expiration_ledger` has passed. A higher `nonce` replaces
+    /// any earlier delegation for the same `(source, relayer)` pair.
+    pub fn delegate_relayer(
+        env: Env,
+        source: Address,
+        relayer: Address,
+        nonce: u64,
+        expiration_ledger: u32,
+        signature: BytesN<64>,
+    ) {
+        relayer::delegate_relayer(&env, source, relayer, nonce, expiration_ledger, signature);
+    }
+
+    /// Returns the currently active source delegation for `(source, relayer)`, if any.
+    pub fn get_relayer_delegation(
+        env: Env,
+        source: Address,
+        relayer: Address,
+    ) -> Option<SourceRelayerDelegation> {
+        relayer::get_relayer_delegation(&env, source, relayer)
+    }
+
+    /// Challenges a relayed price as unauthorized when the source never granted a
+    /// valid delegation to the relayer, or the delegation has expired.
+    ///
+    /// On a valid challenge, the relayer's bond is slashed and the challenger is
+    /// credited with half of the slashed amount.
+    pub fn challenge_relayed_submission(
+        env: Env,
+        challenger: Address,
+        relayer: Address,
+        source: Address,
+        asset: Address,
+        price: i128,
+        timestamp: u64,
+        proof_data: Bytes,
+    ) {
+        relayer::challenge_relayed_submission(
+            &env,
+            challenger,
+            relayer,
+            source,
+            asset,
+            price,
+            timestamp,
+            proof_data,
+        );
+    }
+
     /// Submits a price for an asset on behalf of an oracle source via an approved relayer.
     ///
     /// Both `relayer` and `source` must authorize this invocation. The source creates a
@@ -3546,7 +3673,7 @@ impl PriceOracleContract {
     /// # Errors
     ///
     /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
-    pub fn set_cross_chain_verification_enabled(env: Env, enabled: bool) {
+    pub fn set_cross_verify_enabled(env: Env, enabled: bool) {
         cross_chain_verify::set_cross_chain_verification_enabled(&env, enabled);
     }
 
@@ -3559,7 +3686,7 @@ impl PriceOracleContract {
     /// # Returns
     ///
     /// `true` if verification is enabled, `false` otherwise.
-    pub fn is_cross_chain_verification_enabled(env: Env) -> bool {
+    pub fn is_cross_verify_enabled(env: Env) -> bool {
         cross_chain_verify::is_cross_chain_verification_enabled(&env)
     }
 
@@ -4951,6 +5078,241 @@ impl PriceOracleContract {
     pub fn metadata_get_feed(env: Env, asset: Address) -> Option<FeedMetadata> {
         ecosystem_metadata::get_feed_metadata(&env, asset)
     }
+
+    // --- Canonical cross-chain asset registry ---
+
+    /// Registers a canonical mapping from `stellar_asset` to its representation
+    /// on a foreign `chain`. Admin-only. See [`crate::asset_registry`].
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::NotAuthorized`] — caller is not the admin.
+    /// * [`ErrorCode::AssetNotRegistered`] — `stellar_asset` is not registered.
+    /// * [`ErrorCode::ForeignAssetAlreadyMapped`] — a mapping already exists.
+    pub fn register_foreign_asset_mapping(
+        env: Env,
+        stellar_asset: Address,
+        chain: String,
+        foreign_address: BytesN<32>,
+        decimals: u32,
+    ) {
+        asset_registry::register_foreign_asset_mapping(
+            &env,
+            stellar_asset,
+            chain,
+            foreign_address,
+            decimals,
+        );
+    }
+
+    /// Updates an existing foreign asset mapping's decimals and enabled flag. Admin-only.
+    pub fn update_foreign_asset_mapping(
+        env: Env,
+        chain: String,
+        foreign_address: BytesN<32>,
+        decimals: u32,
+        enabled: bool,
+    ) {
+        asset_registry::update_foreign_asset_mapping(&env, chain, foreign_address, decimals, enabled);
+    }
+
+    /// Removes a foreign asset mapping. Admin-only.
+    pub fn remove_foreign_asset_mapping(env: Env, chain: String, foreign_address: BytesN<32>) {
+        asset_registry::remove_foreign_asset_mapping(&env, chain, foreign_address);
+    }
+
+    /// Returns the mapping for `(chain, foreign_address)`, if any.
+    pub fn get_foreign_asset_mapping(
+        env: Env,
+        chain: String,
+        foreign_address: BytesN<32>,
+    ) -> Option<ForeignAssetMapping> {
+        asset_registry::get_foreign_asset_mapping(&env, chain, foreign_address)
+    }
+
+    /// Returns every foreign-chain mapping registered for `asset`.
+    pub fn get_foreign_mappings_for_asset(env: Env, asset: Address) -> Vec<ForeignAssetMapping> {
+        asset_registry::get_foreign_mappings_for_asset(&env, asset)
+    }
+
+    // --- #226: Cross-chain reference-price verification ---
+
+    /// Enables or disables cross-chain reference-price verification globally. Admin-only.
+    pub fn set_cross_chain_verification_enabled(env: Env, enabled: bool) {
+        cross_chain_verify::set_cross_chain_verification_enabled(&env, enabled);
+    }
+
+    /// Returns whether cross-chain reference-price verification is enabled.
+    pub fn is_cross_chain_verification_enabled(env: Env) -> bool {
+        cross_chain_verify::is_cross_chain_verification_enabled(&env)
+    }
+
+    /// Sets the maximum allowed deviation (basis points) between this oracle's
+    /// price and a reference chain's price. Admin-only.
+    pub fn set_cross_chain_deviation_threshold(env: Env, threshold_bps: u32) {
+        cross_chain_verify::set_cross_chain_deviation_threshold(&env, threshold_bps);
+    }
+
+    /// Returns the current cross-chain deviation threshold in basis points.
+    pub fn get_cross_chain_deviation_threshold(env: Env) -> u32 {
+        cross_chain_verify::get_cross_chain_deviation_threshold(&env)
+    }
+
+    /// Records a reference price for `asset` observed on `oracle_chain`, for later
+    /// verification against this oracle's own aggregate. Admin-only.
+    pub fn submit_cross_chain_price(
+        env: Env,
+        asset: Address,
+        oracle_chain: Address,
+        price: i128,
+        decimals: u32,
+        chain_id: String,
+        timestamp: u64,
+    ) {
+        cross_chain_verify::submit_cross_chain_price(
+            &env,
+            asset,
+            oracle_chain,
+            price,
+            decimals,
+            chain_id,
+            timestamp,
+        );
+    }
+
+    /// Returns the most recent recorded cross-chain reference price for `asset`
+    /// from `oracle_chain`, if any (includes prices recorded by the Axelar/LayerZero
+    /// bridge integrations, not only [`Self::submit_cross_chain_price`]).
+    pub fn get_cross_chain_price(
+        env: Env,
+        asset: Address,
+        oracle_chain: Address,
+    ) -> Option<CrossChainPriceEntry> {
+        cross_chain_verify::get_cross_chain_price(&env, &asset, &oracle_chain)
+    }
+
+    // --- Axelar GMP integration ---
+
+    /// Configures the trusted Axelar Gateway contract address. Admin-only.
+    pub fn set_axelar_gateway(env: Env, gateway: Address) {
+        axelar_gmp::set_axelar_gateway(&env, gateway);
+    }
+
+    /// Returns the currently configured Axelar Gateway address, if any.
+    pub fn get_axelar_gateway(env: Env) -> Option<Address> {
+        axelar_gmp::get_axelar_gateway(&env)
+    }
+
+    /// Registers `bridge_source` (an already-registered oracle source) as the
+    /// attribution target for GMP messages from `(source_chain, source_address)`.
+    /// Admin-only.
+    pub fn set_axelar_trusted_source(
+        env: Env,
+        source_chain: String,
+        source_address: String,
+        bridge_source: Address,
+    ) {
+        axelar_gmp::set_axelar_trusted_source(&env, source_chain, source_address, bridge_source);
+    }
+
+    /// Revokes a trusted Axelar GMP source. Admin-only.
+    pub fn remove_axelar_trusted_source(env: Env, source_chain: String, source_address: String) {
+        axelar_gmp::remove_axelar_trusted_source(&env, source_chain, source_address);
+    }
+
+    /// Delivers a price update relayed over Axelar GMP. `gateway` must match the
+    /// configured trusted Gateway address and authorize this call — satisfied
+    /// automatically when the real Axelar Gateway contract invokes this function
+    /// directly after its own verifier-set quorum check has approved the message.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::AxelarGatewayNotConfigured`] — no Gateway has been configured.
+    /// * [`ErrorCode::NotAuthorized`] — `gateway` does not match the configured Gateway.
+    /// * [`ErrorCode::AxelarCommandAlreadyExecuted`] — `command_id` was already processed.
+    /// * [`ErrorCode::AxelarSourceNotTrusted`] — no bridge source is registered for
+    ///   `(source_chain, source_address)`.
+    /// * [`ErrorCode::ForeignAssetNotMapped`] — the payload's foreign asset id has no
+    ///   registry mapping on `source_chain`.
+    pub fn execute_axelar_message(
+        env: Env,
+        gateway: Address,
+        command_id: BytesN<32>,
+        source_chain: String,
+        source_address: String,
+        payload: Bytes,
+    ) {
+        axelar_gmp::execute_axelar_message(
+            &env,
+            gateway,
+            command_id,
+            source_chain,
+            source_address,
+            payload,
+        );
+    }
+
+    // --- LayerZero integration ---
+
+    /// Configures the trusted LayerZero Endpoint contract address. Admin-only.
+    pub fn set_layerzero_endpoint(env: Env, endpoint: Address) {
+        layerzero::set_layerzero_endpoint(&env, endpoint);
+    }
+
+    /// Returns the currently configured LayerZero Endpoint address, if any.
+    pub fn get_layerzero_endpoint(env: Env) -> Option<Address> {
+        layerzero::get_layerzero_endpoint(&env)
+    }
+
+    /// Maps a LayerZero source endpoint id onto a canonical registry chain name
+    /// (e.g. `30101 -> "ethereum"`). Admin-only.
+    pub fn set_lz_chain_name(env: Env, src_eid: u32, chain: String) {
+        layerzero::set_lz_chain_name(&env, src_eid, chain);
+    }
+
+    /// Registers `bridge_source` (an already-registered oracle source) as the
+    /// attribution target for messages from the `(src_eid, sender)` pathway.
+    /// Admin-only.
+    pub fn set_lz_trusted_remote(env: Env, src_eid: u32, sender: BytesN<32>, bridge_source: Address) {
+        layerzero::set_trusted_remote(&env, src_eid, sender, bridge_source);
+    }
+
+    /// Revokes a trusted LayerZero remote pathway. Admin-only.
+    pub fn remove_lz_trusted_remote(env: Env, src_eid: u32, sender: BytesN<32>) {
+        layerzero::remove_trusted_remote(&env, src_eid, sender);
+    }
+
+    /// Returns the last accepted inbound nonce for a `(src_eid, sender)` pathway (`0` if none).
+    pub fn get_lz_inbound_nonce(env: Env, src_eid: u32, sender: BytesN<32>) -> u64 {
+        layerzero::get_inbound_nonce(&env, src_eid, sender)
+    }
+
+    /// Delivers a price update via a LayerZero `lzReceive`-style call. `endpoint`
+    /// must match the configured trusted Endpoint address and authorize this
+    /// call. Nonce ordering is strictly enforced per `(src_eid, sender)` pathway.
+    ///
+    /// # Errors
+    ///
+    /// * [`ErrorCode::LzEndpointNotConfigured`] — no Endpoint has been configured.
+    /// * [`ErrorCode::NotAuthorized`] — `endpoint` does not match the configured Endpoint.
+    /// * [`ErrorCode::LzNonceOutOfOrder`] — `nonce` is not exactly one greater than
+    ///   the last accepted nonce for this pathway.
+    /// * [`ErrorCode::LzRemoteNotTrusted`] — no bridge source is registered for
+    ///   `(src_eid, sender)`.
+    /// * [`ErrorCode::LzChainNameNotConfigured`] — `src_eid` has no registry chain name.
+    /// * [`ErrorCode::ForeignAssetNotMapped`] — the payload's foreign asset id has no
+    ///   registry mapping on that chain.
+    pub fn lz_receive(
+        env: Env,
+        endpoint: Address,
+        src_eid: u32,
+        sender: BytesN<32>,
+        nonce: u64,
+        guid: BytesN<32>,
+        message: Bytes,
+    ) {
+        layerzero::lz_receive(&env, endpoint, src_eid, sender, nonce, guid, message);
+    }
 }
 
 #[cfg(test)]
@@ -4994,3 +5356,15 @@ mod issue_309_rate_limiting_tests;
 
 #[cfg(test)]
 mod issue_310_fee_market_tests;
+
+#[cfg(test)]
+mod issue_378_lazy_loading_tests;
+
+#[cfg(test)]
+mod issue_379_batch_writes_tests;
+
+#[cfg(test)]
+mod issue_380_memory_allocation_tests;
+
+#[cfg(test)]
+mod issue_381_adaptive_ttl_tests;

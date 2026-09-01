@@ -1267,7 +1267,7 @@ pub struct FmMinPriorityFeeChangedEvent {
 /// Emitted when the fee distribution ratio is changed (#176).
 #[contractevent]
 #[derive(Clone)]
-pub struct FmFeeDistributionRatioChangedEvent {
+pub struct FmFeeRatioChangedEvent {
     pub ratio_bps: u32,
 }
 
@@ -1673,14 +1673,6 @@ pub struct OperationQueuedEvent {
     pub expires_at_ledger: u32,
 }
 
-/// Emitted when a pending operation is successfully executed.
-#[contractevent]
-#[derive(Clone)]
-pub struct OperationExecutedEvent {
-    #[topic]
-    pub operation_id: u64,
-}
-
 /// Emitted when a pending operation is expired (either on-demand or via maintenance sweep).
 #[contractevent]
 #[derive(Clone)]
@@ -1809,4 +1801,115 @@ pub struct FeedMetadataUpdatedEvent {
     pub asset: Address,
     pub symbol: String,
     pub updated_at: u64,
+}
+
+// =============================================================================
+// Canonical Cross-Chain Asset Registry Events
+// =============================================================================
+
+/// Emitted when a new foreign-chain asset mapping is registered.
+#[contractevent]
+#[derive(Clone)]
+pub struct ForeignAssetMappedEvent {
+    #[topic]
+    pub stellar_asset: Address,
+    pub chain: String,
+    pub foreign_address: BytesN<32>,
+    pub decimals: u32,
+}
+
+/// Emitted when an existing foreign-chain asset mapping is updated
+/// (decimals and/or enabled flag).
+#[contractevent]
+#[derive(Clone)]
+pub struct ForeignAssetMappingUpdatedEvent {
+    #[topic]
+    pub stellar_asset: Address,
+    pub chain: String,
+    pub foreign_address: BytesN<32>,
+    pub decimals: u32,
+    pub enabled: bool,
+}
+
+/// Emitted when a foreign-chain asset mapping is removed.
+#[contractevent]
+#[derive(Clone)]
+pub struct ForeignAssetMappingRemovedEvent {
+    #[topic]
+    pub stellar_asset: Address,
+    pub chain: String,
+    pub foreign_address: BytesN<32>,
+}
+
+// =============================================================================
+// Axelar GMP Integration Events
+// =============================================================================
+
+/// Emitted when the trusted Axelar Gateway address is (re)configured.
+#[contractevent]
+#[derive(Clone)]
+pub struct AxelarGatewaySetEvent {
+    #[topic]
+    pub gateway: Address,
+}
+
+/// Emitted when a trusted Axelar GMP source is registered.
+#[contractevent]
+#[derive(Clone)]
+pub struct AxelarTrustedSourceSetEvent {
+    #[topic]
+    pub bridge_source: Address,
+    pub source_chain: String,
+    pub source_address: String,
+}
+
+/// Emitted when a price is applied from a verified Axelar GMP message.
+#[contractevent]
+#[derive(Clone)]
+pub struct AxelarMessageExecutedEvent {
+    #[topic]
+    pub asset: Address,
+    #[topic]
+    pub bridge_source: Address,
+    pub command_id: BytesN<32>,
+    pub source_chain: String,
+    pub source_address: String,
+    pub price: i128,
+}
+
+// =============================================================================
+// LayerZero Integration Events
+// =============================================================================
+
+/// Emitted when the trusted LayerZero Endpoint address is (re)configured.
+#[contractevent]
+#[derive(Clone)]
+pub struct LzEndpointSetEvent {
+    #[topic]
+    pub endpoint: Address,
+}
+
+/// Emitted when a trusted LayerZero remote pathway is registered.
+#[contractevent]
+#[derive(Clone)]
+pub struct LzTrustedRemoteSetEvent {
+    #[topic]
+    pub bridge_source: Address,
+    pub src_eid: u32,
+    pub sender: BytesN<32>,
+}
+
+/// Emitted when a price is applied from a verified LayerZero message.
+#[contractevent]
+#[derive(Clone)]
+pub struct LzMessageReceivedEvent {
+    #[topic]
+    pub asset: Address,
+    #[topic]
+    pub bridge_source: Address,
+    pub src_eid: u32,
+    pub sender: BytesN<32>,
+    pub nonce: u64,
+    pub guid: BytesN<32>,
+    pub price: i128,
 }
