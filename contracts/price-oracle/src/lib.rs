@@ -153,6 +153,18 @@ mod early_submission_discount_tests;
 #[cfg(test)]
 mod upgrade_simulation_tests;
 
+#[cfg(test)]
+mod sdk_v27_compatibility_tests;
+
+#[cfg(test)]
+mod cross_contract_governance_tests;
+
+#[cfg(test)]
+mod delta_encoding_storage_tests;
+
+#[cfg(test)]
+mod wasm_binary_size_tests;
+
 pub use types::{
     AggregatePrice,
     AggregationMethod,
