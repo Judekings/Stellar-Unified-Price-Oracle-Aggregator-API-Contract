@@ -154,16 +154,16 @@ mod early_submission_discount_tests;
 mod upgrade_simulation_tests;
 
 #[cfg(test)]
-mod cross_chain_security_tests;
+mod sdk_v27_compatibility_tests;
 
 #[cfg(test)]
-mod dos_protection_tests;
+mod cross_contract_governance_tests;
 
 #[cfg(test)]
-mod storage_migration_tests;
+mod delta_encoding_storage_tests;
 
 #[cfg(test)]
-mod ci_security_tests;
+mod wasm_binary_size_tests;
 
 pub use types::{
     AggregatePrice,
@@ -200,6 +200,7 @@ pub use types::{
     PriceHistoryEntry,
     PriceOverrideEntry,
     RelayerInfo,
+    SourceRelayerDelegation,
     // Batch dry-run simulation
     SimulationWarning, OperationSimulationResult, BatchSimulationResult,
     // State introspection
@@ -3035,6 +3036,59 @@ impl PriceOracleContract {
         relayer::get_relayer_info(&env, relayer)
     }
 
+    /// Stores a source-authorized relayer delegation that permits `relayer` to submit
+    /// on `source`'s behalf without requiring admin relayer approval.
+    ///
+    /// The delegation is authenticated by the source's registered Ed25519 signing key,
+    /// and it expires once `expiration_ledger` has passed. A higher `nonce` replaces
+    /// any earlier delegation for the same `(source, relayer)` pair.
+    pub fn delegate_relayer(
+        env: Env,
+        source: Address,
+        relayer: Address,
+        nonce: u64,
+        expiration_ledger: u32,
+        signature: BytesN<64>,
+    ) {
+        relayer::delegate_relayer(&env, source, relayer, nonce, expiration_ledger, signature);
+    }
+
+    /// Returns the currently active source delegation for `(source, relayer)`, if any.
+    pub fn get_relayer_delegation(
+        env: Env,
+        source: Address,
+        relayer: Address,
+    ) -> Option<SourceRelayerDelegation> {
+        relayer::get_relayer_delegation(&env, source, relayer)
+    }
+
+    /// Challenges a relayed price as unauthorized when the source never granted a
+    /// valid delegation to the relayer, or the delegation has expired.
+    ///
+    /// On a valid challenge, the relayer's bond is slashed and the challenger is
+    /// credited with half of the slashed amount.
+    pub fn challenge_relayed_submission(
+        env: Env,
+        challenger: Address,
+        relayer: Address,
+        source: Address,
+        asset: Address,
+        price: i128,
+        timestamp: u64,
+        proof_data: Bytes,
+    ) {
+        relayer::challenge_relayed_submission(
+            &env,
+            challenger,
+            relayer,
+            source,
+            asset,
+            price,
+            timestamp,
+            proof_data,
+        );
+    }
+
     /// Submits a price for an asset on behalf of an oracle source via an approved relayer.
     ///
     /// Both `relayer` and `source` must authorize this invocation. The source creates a
@@ -4826,3 +4880,15 @@ mod issue_309_rate_limiting_tests;
 
 #[cfg(test)]
 mod issue_310_fee_market_tests;
+
+#[cfg(test)]
+mod issue_378_lazy_loading_tests;
+
+#[cfg(test)]
+mod issue_379_batch_writes_tests;
+
+#[cfg(test)]
+mod issue_380_memory_allocation_tests;
+
+#[cfg(test)]
+mod issue_381_adaptive_ttl_tests;
