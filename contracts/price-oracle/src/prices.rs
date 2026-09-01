@@ -1290,6 +1290,23 @@ pub fn get_aggregate_with_version(
     crate::types::VersionedAggregatePrice { aggregate, version }
 }
 
+pub fn get_price_with_confidence(
+    env: &Env,
+    asset: Address,
+) -> Option<(AggregatePrice, u32)> {
+    let aggregate = get_price(env, asset.clone(), 0)?;
+
+    let mut prices: Vec<i128> = Vec::new(env);
+    let entries = get_all_prices(env, asset.clone());
+    for i in 0..entries.len() {
+        let entry = entries.get_unchecked(i);
+        prices.push_back(entry.price);
+    }
+
+    let confidence_bps = compute_confidence_bps(&prices);
+    Some((aggregate, confidence_bps))
+}
+
 pub fn get_source_price(env: &Env, asset: Address, source: Address) -> PriceEntry {
     check_registered_asset(env, &asset);
     check_source(env, &source);
