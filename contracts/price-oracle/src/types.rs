@@ -2116,23 +2116,6 @@ pub enum OperationKind {
     SetDescription,
 }
 
-/// A pending operation waiting to be executed or expired.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[contracttype]
-pub struct PendingOperation {
-    /// Unique monotonic id (ledger sequence at creation).
-    pub id: u64,
-    pub kind: OperationKind,
-    /// JSON-style serialized args stored as a String for simplicity.
-    pub args: String,
-    /// Ledger sequence at which this operation was created.
-    pub created_at_ledger: u32,
-    /// Ledger sequence after which this operation is expired and unexecutable.
-    pub expires_at_ledger: u32,
-    /// Whether this operation has been executed already.
-    pub executed: bool,
-}
-
 // ---- Template registry types ----
 
 /// A single parameterized step inside a template.

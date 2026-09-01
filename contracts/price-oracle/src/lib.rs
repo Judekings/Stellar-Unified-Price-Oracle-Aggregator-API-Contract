@@ -19,6 +19,7 @@ mod audit_log;
 mod config_history;
 #[cfg_attr(feature = "fuzz", allow(dead_code))]
 pub(crate) mod core;
+mod correlation;
 mod cross_reference;
 mod deadline_rebate;
 mod dex;
@@ -36,10 +37,12 @@ mod history;
 mod migration;
 mod multisig;
 mod notifications;
+mod operations;
 mod optimistic;
 mod pause;
 mod per_asset_decimals;
 mod prices;
+mod pruning;
 mod rate_limiting;
 mod rbac;
 mod recovery;
@@ -49,6 +52,7 @@ mod relayer_bonds;
 mod relayer_dashboard;
 mod reputation;
 mod rotation;
+mod scheduling;
 mod signed_submission;
 mod simulate_batch;
 mod source_deviation;
@@ -63,14 +67,9 @@ mod triggers;
 mod ttl_batching;
 mod types;
 mod vdf_sampler;
+mod verification;
 mod whitelisting;
 mod zk_verify;
-mod audit_log;
-mod rbac;
-mod emergency_pause;
-mod freeze;
-mod notifications;
-mod config_history;
 mod batch_storage;
 mod price_proof;
 mod price_callback;
@@ -226,7 +225,7 @@ pub use types::{
     RelayerInfo,
     SourceRelayerDelegation,
     // Batch dry-run simulation
-    SimulationWarning, OperationSimulationResult, BatchSimulationResult,
+    SimulationWarning,
     // State introspection
     StateDump, StateAnalysis, StateDiff, StateDiffEntry,
     // DEX / AMM integration
@@ -3527,7 +3526,7 @@ impl PriceOracleContract {
     /// # Errors
     ///
     /// * [`ErrorCode::NotAuthorized`] — if the caller is not the current admin.
-    pub fn set_cross_chain_verification_enabled(env: Env, enabled: bool) {
+    pub fn set_cross_verify_enabled(env: Env, enabled: bool) {
         cross_chain_verify::set_cross_chain_verification_enabled(&env, enabled);
     }
 
@@ -3540,7 +3539,7 @@ impl PriceOracleContract {
     /// # Returns
     ///
     /// `true` if verification is enabled, `false` otherwise.
-    pub fn is_cross_chain_verification_enabled(env: Env) -> bool {
+    pub fn is_cross_verify_enabled(env: Env) -> bool {
         cross_chain_verify::is_cross_chain_verification_enabled(&env)
     }
 
