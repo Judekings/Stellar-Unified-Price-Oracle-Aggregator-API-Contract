@@ -4868,3 +4868,15 @@ mod issue_309_rate_limiting_tests;
 
 #[cfg(test)]
 mod issue_310_fee_market_tests;
+
+#[cfg(test)]
+mod issue_378_lazy_loading_tests;
+
+#[cfg(test)]
+mod issue_379_batch_writes_tests;
+
+#[cfg(test)]
+mod issue_380_memory_allocation_tests;
+
+#[cfg(test)]
+mod issue_381_adaptive_ttl_tests;
