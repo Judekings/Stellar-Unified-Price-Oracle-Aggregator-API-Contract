@@ -99,6 +99,12 @@ mod event_streaming;
 mod circuit_breaker_tests;
 
 #[cfg(test)]
+mod timelock_tests;
+
+#[cfg(test)]
+mod config_bounds_tests;
+
+#[cfg(test)]
 mod cross_ref_tests;
 
 #[cfg(test)]
