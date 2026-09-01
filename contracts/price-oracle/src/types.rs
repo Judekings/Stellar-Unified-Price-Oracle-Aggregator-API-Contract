@@ -596,6 +596,38 @@ pub enum DataKey {
     // -------------------------------------------------------------------------
     /// Stellar ecosystem metadata registry entry.
     EcosystemMetadata,
+
+    // -------------------------------------------------------------------------
+    // Canonical cross-chain asset registry
+    // -------------------------------------------------------------------------
+    /// Canonical [`ForeignAssetMapping`] keyed by (chain identifier, foreign asset id).
+    ForeignAssetMapping(String, BytesN<32>),
+    /// Ordered list of (chain, foreign_address) keys registered for a Stellar asset.
+    AssetForeignMappings(Address),
+    /// Global ordered list of all (chain, foreign_address) keys, for enumeration.
+    ForeignAssetRegistryList,
+
+    // -------------------------------------------------------------------------
+    // Axelar GMP integration
+    // -------------------------------------------------------------------------
+    /// Trusted Axelar Gateway contract address permitted to invoke `execute_axelar_message`.
+    AxelarGateway,
+    /// Replay-protection flag for a processed Axelar `command_id`.
+    AxelarExecutedCommand(BytesN<32>),
+    /// Maps a trusted (source_chain, source_address) GMP sender to a registered bridge source.
+    AxelarTrustedSource(String, String),
+
+    // -------------------------------------------------------------------------
+    // LayerZero integration
+    // -------------------------------------------------------------------------
+    /// Trusted LayerZero Endpoint contract address permitted to invoke `lz_receive`.
+    LzEndpoint,
+    /// Last accepted inbound nonce for a (source endpoint id, sender) pathway.
+    LzInboundNonce(u32, BytesN<32>),
+    /// Maps a trusted (src_eid, sender) LayerZero pathway to a registered bridge source.
+    LzTrustedRemote(u32, BytesN<32>),
+    /// Canonical registry chain name for a LayerZero source endpoint id.
+    LzEidChainName(u32),
 }
 
 /// A price submission from a single oracle source for a specific asset.
@@ -2226,5 +2258,58 @@ pub struct SoroswapPool {
     pub reserve_b: i128,
     pub fee_bps: u32,
     pub enabled: bool,
+}
+
+// =============================================================================
+// Canonical Cross-Chain Asset Registry
+// =============================================================================
+
+/// Canonical mapping from a Stellar asset to its representation on a foreign chain.
+///
+/// Keyed by `(chain, foreign_address)` — see [`crate::asset_registry`]. All
+/// cross-chain integrations (Axelar GMP, LayerZero, manual cross-reference
+/// checks) resolve foreign asset identifiers through this single registry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ForeignAssetMapping {
+    /// The Stellar asset address this mapping resolves to.
+    pub stellar_asset: Address,
+    /// Canonical chain identifier (e.g. `"ethereum"`, `"polygon"`).
+    pub chain: String,
+    /// 32-byte canonical representation of the asset's address on `chain`
+    /// (shorter addresses, e.g. 20-byte EVM addresses, are left-padded).
+    pub foreign_address: BytesN<32>,
+    /// Decimal precision of the price/amount as denominated on `chain`.
+    pub decimals: u32,
+    /// Whether this mapping is currently active. Disabled mappings are kept
+    /// for history but rejected by cross-chain modules.
+    pub enabled: bool,
+}
+
+// =============================================================================
+// Cross-Chain Bridge Message Format (Axelar GMP / LayerZero)
+// =============================================================================
+
+/// Canonical cross-chain price update payload shared by every bridge
+/// integration (Axelar GMP, LayerZero, ...), so a single wire format is
+/// used regardless of which transport carried the message.
+///
+/// Encoded on the wire (see [`crate::bridge_common`]) as the 68-byte
+/// concatenation `foreign_asset(32) || price_le(16) || decimals_le(4) ||
+/// timestamp_le(8) || nonce_le(8)`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct CrossChainPricePayload {
+    /// Foreign-chain asset identifier, resolved via the asset registry.
+    pub foreign_asset: BytesN<32>,
+    /// Raw price value scaled by `10^decimals`.
+    pub price: i128,
+    /// Decimal precision of `price` as observed on the source chain.
+    pub decimals: u32,
+    /// Unix timestamp (seconds) of the price observation on the source chain.
+    pub timestamp: u64,
+    /// Sender-assigned nonce, carried for auditability (ordering itself is
+    /// enforced by the transport, e.g. LayerZero's per-pathway nonce).
+    pub nonce: u64,
 }
 
